@@ -1,0 +1,51 @@
+# ===========================================================================
+#  PSS06 - PRGI Title Verification System : Python AI service
+#
+#  Minimum versions rather than exact pins, on purpose. Exact pins force pip
+#  to compile from source whenever your Python version is newer than the pin
+#  (Python 3.13 + numpy 1.26 is the classic case, and it fails on Windows
+#  unless you have a modern C toolchain installed). Floors let pip pick the
+#  prebuilt wheel that matches your interpreter.
+#
+#  Install:  pip install -r ai-service/requirements.txt
+#  Tested on Python 3.10 - 3.13.
+# ===========================================================================
+
+# --- Web service -----------------------------------------------------------
+fastapi>=0.115.6
+uvicorn[standard]>=0.34.0
+pydantic>=2.10.4
+python-dotenv>=1.0.1
+requests>=2.32.3
+
+# --- Data / database -------------------------------------------------------
+numpy>=1.26.4,<3
+# pandas is capped below 3.0: your load_to_mysql.py / build_processed_dataset.py
+# rely on `df.where(pd.notnull(df), None)`, whose behaviour changed in pandas 3.
+# The AI service itself does not import pandas at all.
+pandas>=2.2.3,<3
+mysql-connector-python>=9.1.0
+bcrypt>=4.2.1
+
+# --- Retrieval fallback (LITE mode - always installed, small) --------------
+scikit-learn>=1.5.2
+scipy>=1.14.1
+
+# --- Phonetics (optional) --------------------------------------------------
+# Faster, better-tested Soundex / Metaphone / Jaro-Winkler. The service has
+# its own pure-Python implementations and runs fine without this.
+jellyfish>=1.1.3
+
+# ===========================================================================
+#  FULL mode (BGE-M3 + FAISS + cross-encoder) - NOT installed by default.
+#  ~3 GB of model weights download on first run. Install separately:
+#
+#     pip install torch --index-url https://download.pytorch.org/whl/cpu
+#     pip install sentence-transformers faiss-cpu
+#
+#  Note: torch ships Python 3.13 wheels from 2.6 onwards. On Python 3.13 make
+#  sure you get torch>=2.6, or use Python 3.11/3.12 for the FULL stack.
+#
+#  Without these the service runs in LITE mode: same rules, same decisions,
+#  TF-IDF character n-grams instead of neural retrieval.
+# ===========================================================================

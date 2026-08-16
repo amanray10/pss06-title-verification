@@ -1,0 +1,32 @@
+# --- secrets ---------------------------------------------------------------
+# .env holds the MySQL password and the JWT secret. Never commit it.
+# .env.example is the committed template - keep that one.
+.env
+.env.local
+.env.*.local
+
+# --- dependencies ------------------------------------------------------------
+node_modules/
+.venv/
+venv/
+
+# --- build output --------------------------------------------------------------
+dist/
+build/
+__pycache__/
+*.pyc
+*.pyo
+
+# --- generated AI artefacts ------------------------------------------------------
+# Rebuilt by scripts/build_faiss_index.py - do not version these.
+models/*.faiss
+models/*.pkl
+models/*.json
+!models/README.txt
+
+# --- misc -------------------------------------------------------------------------
+*.log
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

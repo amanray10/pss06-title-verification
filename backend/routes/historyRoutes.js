@@ -5,7 +5,9 @@ import { optionalAuth, authenticateToken } from '../middleware/authMiddleware.js
 const router = express.Router();
 
 router.get('/', optionalAuth, historyController.list);
+router.get('/pending/stats', optionalAuth, historyController.stats);
 router.get('/pending/list', optionalAuth, historyController.pending);
+router.get('/pending/detail/:applicationRef', optionalAuth, historyController.pendingDetail);
 router.patch('/pending/:applicationRef', authenticateToken, historyController.updatePending);
 router.get('/:trackingId', optionalAuth, historyController.detail);
 

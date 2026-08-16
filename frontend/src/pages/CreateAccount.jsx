@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
+import { useGoogleLogin } from '@react-oauth/google';
 import AuthBrandPanel from '../components/AuthBrandPanel';
 import FormInput from '../components/FormInput';
 import { AlertCircle } from 'lucide-react';
+import { api, tokenStore } from '../api/client';
 
 export const CreateAccount = ({ onNavigate, onRegisterSuccess }) => {
   const [formData, setFormData] = useState({
@@ -23,6 +25,61 @@ export const CreateAccount = ({ onNavigate, onRegisterSuccess }) => {
   };
 
   const strength = calculateStrength(formData.password);
+
+  const handleGoogleLogin = useGoogleLogin({
+    scope: 'email profile openid',
+    onSuccess: async (tokenResponse) => {
+      setLoading(true);
+      setErrorMsg('');
+      try {
+        if (!tokenResponse?.access_token) {
+          throw new Error('No access token received from Google.');
+        }
+
+        const userInfoRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+          headers: { Authorization: `Bearer ${tokenResponse.access_token}` }
+        });
+
+        if (!userInfoRes.ok) {
+          throw new Error(`Google UserInfo API returned ${userInfoRes.status}`);
+        }
+
+        const profile = await userInfoRes.json();
+        
+        if (!profile?.email) {
+          throw new Error('Google did not provide an email address.');
+        }
+
+        const data = await api.googleLogin(null, {
+          email: profile.email,
+          name: profile.name || profile.given_name || profile.email.split('@')[0]
+        });
+
+        if (data.success && data.user) {
+          if (data.token) {
+            tokenStore.set(data.token);
+          }
+          if (onRegisterSuccess) {
+            onRegisterSuccess(data.user);
+          } else if (onNavigate) {
+            onNavigate('dashboard');
+          }
+        } else {
+          setErrorMsg(data.message || 'Google authentication failed.');
+        }
+      } catch (err) {
+        console.error('Google registration error:', err);
+        setErrorMsg(err.message || 'Failed to complete Google Sign-In.');
+      } finally {
+        setLoading(false);
+      }
+    },
+    onError: (error) => {
+      console.error('Google login error:', error);
+      const detail = error?.error_description || error?.error || 'Authorization cancelled or origin mismatch.';
+      setErrorMsg(`Google Sign-In failed: ${detail}`);
+    }
+  });
 
   const handleChange = (e) => {
     setErrorMsg('');
@@ -191,10 +248,8 @@ export const CreateAccount = ({ onNavigate, onRegisterSuccess }) => {
               <button
                 type="button"
                 className="btn btn-outline btn-full btn-google"
-                onClick={() => {
-                  if (onRegisterSuccess) onRegisterSuccess({ username: 'Official User', email: 'official.user@gmail.com' });
-                  else if (onNavigate) onNavigate('email-verification');
-                }}
+                onClick={() => handleGoogleLogin()}
+                disabled={loading}
               >
                 <svg width="18" height="18" viewBox="0 0 24 24">
                   <path

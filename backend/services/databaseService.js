@@ -66,6 +66,14 @@ export const databaseService = {
     return this.findUserByEmail(email);
   },
 
+  async setUserVerified(id) {
+    await query(
+      'UPDATE users SET is_verified = 1, verification_code = NULL WHERE id = ? OR email = ?',
+      [id, id]
+    );
+    return this.findUserById(id);
+  },
+
   async setVerificationCode(email, code) {
     await query('UPDATE users SET verification_code = ? WHERE email = ?',
       [code, String(email).trim().toLowerCase()]);
@@ -309,6 +317,9 @@ export const databaseService = {
   // =======================================================================
   // Pending applications (requirement 5.b)
   // =======================================================================
+  // =======================================================================
+  // Pending applications & Admin Review
+  // =======================================================================
   async createPendingApplication({ applicationRef, userId, verificationId,
                                    title, normalizedTitle, language,
                                    periodicity, publisher, state }) {
@@ -325,30 +336,234 @@ export const databaseService = {
   },
 
   /**
-   * Only PENDING / UNDER_REVIEW rows are returned by default: those are the
-   * ones that actually block a later applicant. Decided applications stay in
-   * the table for the audit trail but no longer hold a claim on the title.
+   * List applications for review with joined user, verification scores, and most similar title.
    */
-  async listPendingApplications(userId = null, includeDecided = false) {
+  async listPendingApplications({ userId = null, includeDecided = false,
+                                  status = null, search = null, limit = 200 } = {}) {
     const where = [];
     const params = [];
-    if (userId) { where.push('user_id = ?'); params.push(userId); }
-    if (!includeDecided) where.push("status IN ('PENDING','UNDER_REVIEW')");
+
+    if (userId) {
+      where.push('p.user_id = ?');
+      params.push(userId);
+    }
+
+    if (status && status !== 'ALL') {
+      if (status === 'PENDING') {
+        where.push("p.status IN ('PENDING')");
+      } else if (status === 'MANUAL_REVIEW' || status === 'UNDER_REVIEW') {
+        where.push("p.status IN ('MANUAL_REVIEW', 'UNDER_REVIEW')");
+      } else if (status === 'ACCEPTED' || status === 'APPROVED') {
+        where.push("p.status IN ('ACCEPTED', 'APPROVED')");
+      } else if (status === 'REJECTED') {
+        where.push("p.status = 'REJECTED'");
+      } else {
+        where.push('p.status = ?');
+        params.push(status);
+      }
+    } else if (!includeDecided) {
+      where.push("p.status IN ('PENDING','UNDER_REVIEW','MANUAL_REVIEW')");
+    }
+
+    if (search) {
+      where.push('(p.title LIKE ? OR p.application_ref LIKE ? OR p.publisher LIKE ? OR u.username LIKE ?)');
+      const like = `%${search}%`;
+      params.push(like, like, like, like);
+    }
+
     const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    return query(
-      `SELECT * FROM pending_applications ${clause}
-       ORDER BY submitted_at DESC LIMIT 200`, params
+    const rows = await query(
+      `SELECT
+         p.id,
+         p.application_ref          AS applicationRef,
+         p.user_id                  AS userId,
+         p.verification_id          AS verificationId,
+         p.title,
+         p.normalized_title         AS normalizedTitle,
+         p.language,
+         p.periodicity,
+         p.publisher,
+         p.publication_state        AS publicationState,
+         p.status,
+         p.reviewed_by              AS reviewedBy,
+         p.reviewed_at              AS reviewedAt,
+         p.rejection_reason         AS rejectionReason,
+         p.submitted_at             AS submittedAt,
+         p.decided_at               AS decidedAt,
+         u.username                 AS submittedByName,
+         u.email                    AS submittedByEmail,
+         u.organization             AS submittedByOrg,
+         v.tracking_id              AS trackingId,
+         v.decision                 AS aiDecision,
+         v.publication_type         AS publicationType,
+         v.similarity_score         AS similarityScore,
+         v.verification_probability AS verificationProbability,
+         v.explanation              AS aiExplanation,
+         (
+           SELECT m.matched_title
+           FROM verification_matches m
+           WHERE m.verification_id = v.id
+           ORDER BY m.rank_position ASC
+           LIMIT 1
+         ) AS mostSimilarTitle
+       FROM pending_applications p
+       LEFT JOIN users u ON p.user_id = u.id
+       LEFT JOIN verification_results v ON p.verification_id = v.id
+       ${clause}
+       ORDER BY p.submitted_at DESC
+       LIMIT ${Number(limit)}`,
+      params
     );
+
+    return rows.map((r) => ({
+      ...r,
+      similarityScore: Number(r.similarityScore ?? 0),
+      verificationProbability: Number(r.verificationProbability ?? 0),
+      submittedByName: r.submittedByName || r.publisher || 'Applicant'
+    }));
   },
 
-  async updatePendingStatus(applicationRef, status) {
+  async getPendingApplicationByRef(applicationRef) {
+    const rows = await query(
+      `SELECT
+         p.id,
+         p.application_ref          AS applicationRef,
+         p.user_id                  AS userId,
+         p.verification_id          AS verificationId,
+         p.title,
+         p.normalized_title         AS normalizedTitle,
+         p.language,
+         p.periodicity,
+         p.publisher,
+         p.publication_state        AS publicationState,
+         p.status,
+         p.reviewed_by              AS reviewedBy,
+         p.reviewed_at              AS reviewedAt,
+         p.rejection_reason         AS rejectionReason,
+         p.submitted_at             AS submittedAt,
+         p.decided_at               AS decidedAt,
+         u.username                 AS submittedByName,
+         u.email                    AS submittedByEmail,
+         u.mobile                   AS submittedByMobile,
+         u.organization             AS submittedByOrg,
+         v.tracking_id              AS trackingId,
+         v.decision                 AS aiDecision,
+         v.publication_type         AS publicationType,
+         v.similarity_score         AS similarityScore,
+         v.verification_probability AS verificationProbability,
+         v.explanation              AS aiExplanation,
+         v.findings                 AS findings,
+         v.checks_passed            AS checksPassed,
+         v.suggestions              AS suggestions,
+         v.agent_trace              AS agentTrace
+       FROM pending_applications p
+       LEFT JOIN users u ON p.user_id = u.id
+       LEFT JOIN verification_results v ON p.verification_id = v.id
+       WHERE p.application_ref = ?
+       LIMIT 1`,
+      [applicationRef]
+    );
+
+    if (!rows.length) return null;
+    const app = rows[0];
+
+    let matches = [];
+    if (app.verificationId) {
+      matches = await query(
+        `SELECT * FROM verification_matches
+         WHERE verification_id = ? ORDER BY rank_position ASC`,
+        [app.verificationId]
+      );
+    }
+
+    return {
+      ...app,
+      similarityScore: Number(app.similarityScore ?? 0),
+      verificationProbability: Number(app.verificationProbability ?? 0),
+      submittedByName: app.submittedByName || app.publisher || 'Applicant',
+      findings: parseJson(app.findings, []),
+      checksPassed: parseJson(app.checksPassed, []),
+      suggestions: parseJson(app.suggestions, []),
+      agentTrace: parseJson(app.agentTrace, []),
+      similarTitles: matches.map((m) => ({
+        rank: m.rank_position,
+        title: m.matched_title,
+        similarity: Number(m.similarity),
+        scores: {
+          semantic: Number(m.semantic_score ?? 0),
+          reranker: Number(m.reranker_score ?? 0),
+          fuzzy: Number(m.fuzzy_score ?? 0),
+          phonetic: Number(m.phonetic_score ?? 0),
+          token: Number(m.token_score ?? 0)
+        },
+        matchedVia: (m.matched_via || '').split(',').filter(Boolean),
+        metadata: {
+          registrationNumber: m.registration_number,
+          publisher: m.publisher,
+          language: m.language,
+          state: m.publication_state,
+          source: m.source
+        }
+      }))
+    };
+  },
+
+  async updatePendingStatus(applicationRef, status, { reviewedBy = null, rejectionReason = null } = {}) {
+    // Normalise status
+    let dbStatus = status;
+    if (status === 'ACCEPT') dbStatus = 'ACCEPTED';
+    if (status === 'MANUAL_REVIEW') dbStatus = 'MANUAL_REVIEW';
+    if (status === 'REJECT') dbStatus = 'REJECTED';
+
     await query(
       `UPDATE pending_applications
-       SET status = ?, decided_at = CASE WHEN ? IN ('APPROVED','REJECTED','WITHDRAWN')
-                                         THEN NOW() ELSE decided_at END
+       SET
+         status = ?,
+         reviewed_by = COALESCE(?, reviewed_by),
+         reviewed_at = NOW(),
+         rejection_reason = ?,
+         decided_at = CASE WHEN ? IN ('APPROVED','ACCEPTED','REJECTED','WITHDRAWN')
+                           THEN NOW() ELSE decided_at END
        WHERE application_ref = ?`,
-      [status, status, applicationRef]
+      [dbStatus, reviewedBy, rejectionReason || null, dbStatus, applicationRef]
     );
+
+    return { applicationRef, status: dbStatus, reviewedBy, rejectionReason };
+  },
+
+  async getAdminStats() {
+    try {
+      const [pendingRow] = await query(
+        "SELECT COUNT(*) AS count FROM pending_applications WHERE status IN ('PENDING','UNDER_REVIEW','MANUAL_REVIEW')"
+      );
+      const [acceptedRow] = await query(
+        "SELECT COUNT(*) AS count FROM pending_applications WHERE status IN ('ACCEPTED','APPROVED')"
+      );
+      const [rejectedRow] = await query(
+        "SELECT COUNT(*) AS count FROM pending_applications WHERE status = 'REJECTED'"
+      );
+      const [totalRow] = await query(
+        "SELECT COUNT(*) AS count FROM verification_results"
+      );
+      const [appTotalRow] = await query(
+        "SELECT COUNT(*) AS count FROM pending_applications"
+      );
+
+      return {
+        pendingReviews: Number(pendingRow?.count || 0),
+        acceptedToday: Number(acceptedRow?.count || 0),
+        rejectedToday: Number(rejectedRow?.count || 0),
+        totalRequests: Math.max(Number(totalRow?.count || 0), Number(appTotalRow?.count || 0), 1)
+      };
+    } catch (err) {
+      console.error('[databaseService] getAdminStats error:', err);
+      return {
+        pendingReviews: 0,
+        acceptedToday: 0,
+        rejectedToday: 0,
+        totalRequests: 0
+      };
+    }
   },
 
   // =======================================================================

@@ -65,6 +65,9 @@ export const api = {
   login: (email, password) =>
     request('/api/auth/login', { method: 'POST', body: { email, password }, auth: false }),
 
+  googleLogin: (credential, profile = {}) =>
+    request('/api/auth/google', { method: 'POST', body: { credential, ...profile }, auth: false }),
+
   register: (payload) =>
     request('/api/auth/register', { method: 'POST', body: payload, auth: false }),
 
@@ -102,6 +105,25 @@ export const api = {
 
   pendingApplications: (scope = 'mine') =>
     request(`/api/history/pending/list?scope=${scope}`),
+
+  // -- admin review workflow ------------------------------------------------
+  adminStats: () => request('/api/history/pending/stats'),
+
+  adminPendingList: ({ scope = 'all', status = 'ALL', search = '', includeDecided = true } = {}) => {
+    const qs = new URLSearchParams({ scope, includeDecided: String(includeDecided) });
+    if (status && status !== 'ALL') qs.set('status', status);
+    if (search) qs.set('search', search);
+    return request(`/api/history/pending/list?${qs.toString()}`);
+  },
+
+  adminPendingDetail: (applicationRef) =>
+    request(`/api/history/pending/detail/${encodeURIComponent(applicationRef)}`),
+
+  adminUpdateDecision: (applicationRef, { status, rejectionReason } = {}) =>
+    request(`/api/history/pending/${encodeURIComponent(applicationRef)}`, {
+      method: 'PATCH',
+      body: { status, rejectionReason }
+    }),
 
   health: () => request('/api/health', { auth: false })
 };

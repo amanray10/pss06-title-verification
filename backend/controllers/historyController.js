@@ -52,37 +52,103 @@ export const historyController = {
   // GET /api/history/pending/list
   async pending(req, res) {
     try {
-      const rows = await databaseService.listPendingApplications(
-        String(req.query.scope || 'mine') === 'all' ? null : req.user?.id || null,
-        String(req.query.includeDecided || '') === 'true'
-      );
+      const scope = String(req.query.scope || 'mine');
+      const userId = scope === 'all' ? null : req.user?.id || null;
+      const includeDecided = String(req.query.includeDecided || '') === 'true';
+      const status = req.query.status || null;
+      const search = req.query.search || null;
+
+      const rows = await databaseService.listPendingApplications({
+        userId,
+        includeDecided,
+        status,
+        search
+      });
       return res.json({ success: true, applications: rows });
     } catch (err) {
+      console.error('[history] pending list failed:', err);
       return res.status(503).json({
         success: false, message: err.message, applications: []
       });
     }
   },
 
+  // GET /api/history/pending/detail/:applicationRef
+  async pendingDetail(req, res) {
+    try {
+      const record = await databaseService.getPendingApplicationByRef(req.params.applicationRef);
+      if (!record) {
+        return res.status(404).json({
+          success: false,
+          message: 'No pending application found with that reference ID.'
+        });
+      }
+      return res.json({ success: true, application: record });
+    } catch (err) {
+      console.error('[history] pendingDetail failed:', err);
+      return res.status(503).json({ success: false, message: err.message });
+    }
+  },
+
+  // GET /api/history/pending/stats
+  async stats(req, res) {
+    try {
+      const stats = await databaseService.getAdminStats();
+      return res.json({ success: true, stats });
+    } catch (err) {
+      console.error('[history] stats failed:', err);
+      return res.status(503).json({
+        success: false,
+        message: err.message,
+        stats: { pendingReviews: 0, acceptedToday: 0, rejectedToday: 0, totalRequests: 0 }
+      });
+    }
+  },
+
   // PATCH /api/history/pending/:applicationRef
   async updatePending(req, res) {
-    const allowed = ['PENDING', 'UNDER_REVIEW', 'APPROVED', 'WITHDRAWN', 'REJECTED'];
-    const status = String(req.body?.status || '').toUpperCase();
+    const allowed = [
+      'PENDING', 'UNDER_REVIEW', 'MANUAL_REVIEW',
+      'APPROVED', 'ACCEPTED', 'WITHDRAWN', 'REJECTED', 'ACCEPT', 'REJECT'
+    ];
+    let status = String(req.body?.status || '').toUpperCase();
     if (!allowed.includes(status)) {
       return res.status(400).json({
         success: false,
         message: `Status must be one of: ${allowed.join(', ')}`
       });
     }
+
+    const rejectionReason = req.body?.rejectionReason ? String(req.body.rejectionReason).trim() : null;
+    if ((status === 'REJECT' || status === 'REJECTED') && !rejectionReason) {
+      return res.status(400).json({
+        success: false,
+        message: 'Rejection reason is mandatory when rejecting a publication title.'
+      });
+    }
+
+    const reviewedBy = req.user?.username || req.user?.email || req.user?.id || 'Administrator';
+
     try {
-      await databaseService.updatePendingStatus(req.params.applicationRef, status);
-      // Approving or withdrawing changes what later applicants are checked
+      const result = await databaseService.updatePendingStatus(
+        req.params.applicationRef,
+        status,
+        { reviewedBy, rejectionReason }
+      );
+
+      // Approving, accepting or withdrawing changes what later applicants are checked
       // against, so the AI corpus is refreshed.
-      if (['APPROVED', 'WITHDRAWN', 'REJECTED'].includes(status)) {
+      if (['APPROVED', 'ACCEPTED', 'WITHDRAWN', 'REJECTED', 'REJECT'].includes(status)) {
         aiService.reload().catch(() => {});
       }
-      return res.json({ success: true, applicationRef: req.params.applicationRef, status });
+
+      return res.json({
+        success: true,
+        message: `Title status updated to ${result.status}.`,
+        ...result
+      });
     } catch (err) {
+      console.error('[history] updatePending failed:', err);
       return res.status(503).json({ success: false, message: err.message });
     }
   }

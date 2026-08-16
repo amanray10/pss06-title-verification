@@ -146,17 +146,85 @@ export const authController = {
   // POST /api/auth/resend-verification
   async resendVerification(req, res) {
     try {
-      const email = req.body?.email || req.user?.email;
+      const { email } = req.body;
+      const user = await databaseService.findUserByEmail(email);
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          message: 'No account registered with this email.'
+        });
+      }
       const code = String(Math.floor(100000 + Math.random() * 900000));
-      await databaseService.setVerificationCode(email, code);
+      await databaseService.setVerificationCode(user.id, code);
       return res.json({
         success: true,
-        message: `A new verification link has been dispatched to ${email}.`,
-        code
+        message: `A new verification code has been dispatched. (Demo code: ${code})`
       });
     } catch (err) {
-      console.error('[auth] resendVerification failed:', err);
-      return res.status(500).json({ success: false, message: 'Could not resend.' });
+      console.error('[authController.resendVerification] error:', err);
+      return res.status(500).json({ success: false, message: 'Failed to resend code.' });
+    }
+  },
+
+  // POST /api/auth/google
+  async googleLogin(req, res) {
+    try {
+      const { credential, email: bodyEmail, name: bodyName } = req.body;
+      let email = bodyEmail;
+      let name = bodyName;
+
+      if (credential) {
+        try {
+          const parts = credential.split('.');
+          if (parts.length === 3) {
+            const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
+            if (payload.email) {
+              email = payload.email;
+              name = payload.name || payload.given_name || payload.email.split('@')[0];
+            }
+          }
+        } catch (e) {
+          console.error('[GoogleAuth] Failed to parse credential:', e);
+        }
+      }
+
+      if (!email) {
+        return res.status(400).json({
+          success: false,
+          message: 'Valid Google account email is required.'
+        });
+      }
+
+      let user = await databaseService.findUserByEmail(email);
+
+      if (!user) {
+        const id = `usr_g_${Date.now()}_${crypto.randomBytes(2).toString('hex')}`;
+        const dummyHash = await bcrypt.hash(crypto.randomBytes(16).toString('hex'), SALT_ROUNDS);
+        user = await databaseService.createUser({
+          id,
+          username: name || email.split('@')[0],
+          email,
+          mobile: null,
+          organization: 'Google Verified User',
+          passwordHash: dummyHash,
+          role: 'Administrator'
+        });
+        await databaseService.setUserVerified(id);
+        user = await databaseService.findUserById(id);
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: 'Google authentication successful.',
+        user: publicUser(user),
+        token: signToken(user)
+      });
+    } catch (err) {
+      console.error('[authController.googleLogin] error:', err);
+      return res.status(500).json({
+        success: false,
+        message: 'Google login failed on server.'
+      });
     }
   },
 

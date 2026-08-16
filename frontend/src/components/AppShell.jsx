@@ -48,10 +48,14 @@ export const AppShell = ({
     onNavigate?.(page);
   };
 
+  const role = String(user?.role || '').toLowerCase();
+  const isAdmin = role.includes('admin') || role.includes('officer');
+
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, page: 'dashboard' },
     { id: 'new', label: 'New Verification', icon: PlusCircle, page: 'dashboard' },
-    { id: 'my-verifications', label: 'My Verifications', icon: History, page: 'my-verifications' }
+    { id: 'my-verifications', label: 'My Verifications', icon: History, page: 'my-verifications' },
+    ...(isAdmin ? [{ id: 'admin-dashboard', label: 'Admin Review Queue', icon: ShieldCheck, page: 'admin-dashboard' }] : [])
   ];
 
   const aiOk = engine?.aiService?.reachable;

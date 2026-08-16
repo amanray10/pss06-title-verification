@@ -134,8 +134,11 @@ CREATE TABLE IF NOT EXISTS pending_applications (
     periodicity       VARCHAR(60)          DEFAULT NULL,
     publisher         VARCHAR(190)         DEFAULT NULL,
     publication_state VARCHAR(100)         DEFAULT NULL,
-    status            ENUM('PENDING','UNDER_REVIEW','APPROVED','WITHDRAWN','REJECTED')
+    status            ENUM('PENDING','UNDER_REVIEW','APPROVED','WITHDRAWN','REJECTED','MANUAL_REVIEW','ACCEPTED')
                       NOT NULL DEFAULT 'PENDING',
+    reviewed_by       VARCHAR(64)          DEFAULT NULL,
+    reviewed_at       DATETIME             DEFAULT NULL,
+    rejection_reason  TEXT                 DEFAULT NULL,
     submitted_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     decided_at        DATETIME             DEFAULT NULL,
     PRIMARY KEY (id),

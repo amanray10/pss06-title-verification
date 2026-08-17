@@ -26,6 +26,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set
 
 import config
 from preprocessing.normalizer import NormalizedTitle, normalize_title
+from rules.nonsense_detector import fit_ngram_model 
 
 log = logging.getLogger("pss06.corpus")
 
@@ -88,6 +89,7 @@ class TitleCorpus:
             if rec.norm is None:
                 rec.norm = normalize_title(rec.title)
             self._index_record(rec)
+        self.ngram_model = fit_ngram_model(list(self.token_index.keys()), order=2)
         log.info(
             "Corpus indices built: %d titles, %d distinct cores, %d phonetic keys",
             len(self.records), len(self.core_index), len(self.phonetic_index),

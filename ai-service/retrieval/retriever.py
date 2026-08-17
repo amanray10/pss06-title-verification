@@ -50,11 +50,15 @@ class Candidate:
     # How many other rows in the registry carry this exact same title
     # (the PRGI register legitimately holds one title per state).
     duplicate_registrations: int = 0
+    # True when this row IS the submitted title, character for character after
+    # normalisation. Such a candidate is pinned at 100% - see _is_identical.
+    is_exact: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "title": self.record.title,
             "similarity": round(self.combined * 100, 1),
+            "isExactDuplicate": self.is_exact,
             "otherRegistrations": self.duplicate_registrations,
             "scores": {
                 "semantic": round(self.semantic, 4),
@@ -124,8 +128,39 @@ class TitleRetriever:
             return {}
 
     @staticmethod
+    def _is_identical(a: NormalizedTitle, b: NormalizedTitle) -> bool:
+        """
+        Is this candidate literally the same title as the one submitted?
+
+        Uses exactly the same test as TitleCorpus.exact_matches, so what the
+        retriever calls a 100% match and what rule R01 calls an exact duplicate
+        can never disagree:
+
+          * identical normalised strings ("THE DAILY NEWS" == "THE DAILY NEWS"), or
+          * identical stop-word-free token strings, which is what makes
+            "The Daily News" and "Daily News" the same masthead.
+        """
+        if a.normalized == b.normalized:
+            return True
+        return bool(a.tokens) and a.tokens == b.tokens
+
+    @staticmethod
     def _combine(semantic: float, rerank: float, fuzzy: float,
-                 phonetic: float, token: float) -> float:
+                 phonetic: float, token: float,
+                 is_exact: bool = False) -> float:
+        """
+        Fuse the similarity signals into one 0-1 score.
+
+        An exact duplicate is pinned at 1.0 rather than fused. The neural
+        signals are bounded estimators - BGE-M3 cosine tops out around 0.99 and
+        the cross-encoder sigmoid around 0.85 even when the two strings are
+        character-for-character identical - so a weighted average of them can
+        never reach 100%. Blending them for a title we KNOW is a duplicate
+        would report "93% similar" for the same title, which is simply wrong
+        and it understates a hard conflict to the reviewing officer.
+        """
+        if is_exact:
+            return 1.0
         w = config.SIMILARITY_WEIGHTS
         score = (w["semantic"] * semantic + w["rerank"] * rerank
                  + w["fuzzy"] * fuzzy + w["phonetic"] * phonetic
@@ -160,6 +195,19 @@ class TitleRetriever:
             rec = self.corpus.get(rid)
             n2 = rec.norm
 
+            exact = self._is_identical(norm, n2)
+            if exact:
+                # Nothing to estimate - every signal is 1.0 by definition.
+                if "exact" not in chans:
+                    chans.append("exact")
+                prelim.append(Candidate(
+                    record=rec, semantic=1.0, rerank=1.0, fuzzy=1.0,
+                    phonetic=1.0, token=1.0, core_overlap=1.0,
+                    concept_overlap=1.0, channels=chans,
+                    is_exact=True, combined=1.0,
+                ))
+                continue
+
             fuzzy = max(
                 fuzzy_similarity(norm.normalized, n2.normalized),
                 fuzzy_similarity(norm.collapsed, n2.collapsed),
@@ -192,6 +240,10 @@ class TitleRetriever:
             norm.normalized, [c.record.norm.normalized for c in shortlist],
         )
         for cand, score in zip(shortlist, rerank_scores):
+            if cand.is_exact:
+                # The cross-encoder's opinion cannot improve on certainty, and
+                # its sigmoid would drag a known duplicate back below 100%.
+                continue
             cand.rerank = float(score)
             cand.combined = self._combine(
                 cand.semantic, cand.rerank, cand.fuzzy,

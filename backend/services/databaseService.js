@@ -103,6 +103,18 @@ export const databaseService = {
     await query('UPDATE users SET last_login_at = NOW() WHERE id = ?', [id]);
   },
 
+  /** Overwrite a user's bcrypt hash (forgot-password flow). */
+  async updateUserPassword(id, passwordHash) {
+    await query('UPDATE users SET password_hash = ? WHERE id = ?', [passwordHash, id]);
+    return this.findUserById(id);
+  },
+
+  /** Change a user's role. Used to repair accounts wrongly created as admins. */
+  async setUserRole(id, role) {
+    await query('UPDATE users SET role = ? WHERE id = ?', [role, id]);
+    return this.findUserById(id);
+  },
+
   // =======================================================================
   // Verifications
   // =======================================================================

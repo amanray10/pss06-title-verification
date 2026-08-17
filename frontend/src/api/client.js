@@ -79,6 +79,9 @@ export const api = {
   resendVerification: (email) =>
     request('/api/auth/resend-verification', { method: 'POST', body: { email } }),
 
+  forgotPassword: (email) =>
+    request('/api/auth/forgot-password', { method: 'POST', body: { email }, auth: false }),
+
   // -- verification --------------------------------------------------------
   verifyTitle: (payload) =>
     request('/api/titles/verify', { method: 'POST', body: payload }),

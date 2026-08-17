@@ -4,6 +4,10 @@
 
 import { databaseService } from '../services/databaseService.js';
 import { aiService } from '../services/aiService.js';
+import { sendMail, decisionEmail } from '../services/mailService.js';
+
+const ACCEPT_STATUSES = ['ACCEPT', 'ACCEPTED', 'APPROVED'];
+const REJECT_STATUSES = ['REJECT', 'REJECTED'];
 
 export const historyController = {
   // GET /api/history?decision=&search=&limit=&offset=&scope=
@@ -124,8 +128,7 @@ export const historyController = {
     // none - the whole point of manual review is that a human explains why.
     const raw = req.body?.reason ?? req.body?.rejectionReason;
     const reason = raw ? String(raw).trim() : null;
-    const isDecision = ['ACCEPT', 'ACCEPTED', 'APPROVED', 'REJECT', 'REJECTED']
-      .includes(status);
+    const isDecision = [...ACCEPT_STATUSES, ...REJECT_STATUSES].includes(status);
 
     if (isDecision && (!reason || reason.length < 10)) {
       return res.status(400).json({
@@ -152,9 +155,26 @@ export const historyController = {
         aiService.reload().catch(() => {});
       }
 
+      // -------------------------------------------------------------------
+      // Notify the applicant. A mail failure must never roll back or hide a
+      // decision that is already recorded, so the outcome is reported back to
+      // the officer rather than thrown.
+      // -------------------------------------------------------------------
+      let notification = { attempted: false };
+      if (isDecision) {
+        notification = await notifyApplicant({
+          applicationRef: req.params.applicationRef,
+          accepted: ACCEPT_STATUSES.includes(status),
+          reason,
+          reviewedBy
+        });
+      }
+
       return res.json({
         success: true,
-        message: `Title status updated to ${result.status}.`,
+        message: `Title status updated to ${result.status}.`
+          + (notification.sent ? ` The applicant has been notified at ${notification.to}.` : ''),
+        notification,
         ...result
       });
     } catch (err) {
@@ -163,5 +183,40 @@ export const historyController = {
     }
   }
 };
+
+/**
+ * Email the applicant the outcome of their manual review.
+ * @returns {Promise<{attempted:boolean, sent?:boolean, to?:string, error?:string}>}
+ */
+async function notifyApplicant({ applicationRef, accepted, reason, reviewedBy }) {
+  try {
+    const app = await databaseService.getPendingApplicationByRef(applicationRef);
+    const to = app?.submittedByEmail;
+
+    if (!to) {
+      return {
+        attempted: false,
+        error: 'This application has no applicant email on record '
+          + '(it was submitted without a signed-in account), so no notification was sent.'
+      };
+    }
+
+    const { subject, html } = decisionEmail({
+      name: app.submittedByName,
+      title: app.title,
+      applicationRef,
+      accepted,
+      reason,
+      reviewedBy,
+      decidedAt: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+    });
+
+    const delivery = await sendMail({ to, subject, html });
+    return { attempted: true, to, ...delivery };
+  } catch (err) {
+    console.error('[history] applicant notification failed:', err.message);
+    return { attempted: true, sent: false, error: err.message };
+  }
+}
 
 export default historyController;

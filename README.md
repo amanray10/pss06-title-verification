@@ -1,5 +1,12 @@
 # PSS06 — PRGI Title Verification System
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
+[![Node 18+](https://img.shields.io/badge/node-18+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![React 18](https://img.shields.io/badge/react-18-61DAFB.svg?logo=react&logoColor=black)](https://react.dev/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-009688.svg?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![MySQL](https://img.shields.io/badge/MySQL-4479A1.svg?logo=mysql&logoColor=white)](https://www.mysql.com/)
+
 An online system that verifies a proposed publication title against the Press
 Registrar General of India register, enforces the PRGI naming guidelines, and
 returns a decision (**ACCEPT / REVIEW / REJECT**) with a **verification
@@ -13,6 +20,17 @@ It is a **neuro-symbolic agentic RAG** system:
 | **Symbolic** | *Given that evidence, what should happen?* | 15 deterministic rules, explicit thresholds, phonetic and lexical indices |
 | **Agentic** | *Which checks do I run, and in what order?* | Verification Agent orchestrating 10 tools, with a recorded trace |
 | **LLM** | *How do I explain this to the applicant?* | Ollama — explanation only, never the decision |
+
+> **Not an official PRGI system.** This is an independent academic project built
+> against publicly available PRGI title records. It is not affiliated with or
+> endorsed by the Press Registrar General of India.
+
+**Contents** — [Architecture](#1-architecture) · [Quick start](#2-quick-start) ·
+[Layout](#3-repository-layout) · [Accounts & email](#4-accounts-roles-and-email) ·
+[FULL vs LITE](#5-full-mode-vs-lite-mode) · [How verification works](#6-how-a-title-is-verified) ·
+[Requirement coverage](#7-requirement-coverage) · [API](#8-api) ·
+[Testing](#9-testing) · [Tuning](#10-tuning) · [Known limits](#11-known-limits) ·
+[License](#12-license)
 
 ---
 
@@ -67,11 +85,99 @@ the same title against the same registry always produce the same outcome.
 
 ---
 
-## 2. Repository layout
+## 2. Quick start
+
+### Prerequisites
+
+| | Version | Notes |
+|---|---|---|
+| Python | 3.10+ | |
+| Node.js | 18+ | ships with npm |
+| MySQL / MariaDB | 8.0+ | running locally |
+| Ollama | *optional* | only for LLM-written explanations |
+
+FULL mode additionally downloads ~3 GB of models. LITE mode needs none — see
+[§5](#5-full-mode-vs-lite-mode).
+
+### 1. Clone and configure
+
+```bash
+git clone https://github.com/amanray10/pss06-title-verification.git
+cd pss06-title-verification
+
+cp .env.example .env                    # Windows: copy .env.example .env
+cp frontend/.env.example frontend/.env
+```
+
+Now open `.env` and fill in every `CHANGE_ME`. The two that actually block
+startup are `MYSQL_PASSWORD` and `JWT_SECRET`:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+```
+
+Paste that output as `JWT_SECRET`. The `SMTP_*` block is optional — leave it and
+the app still runs, it just cannot send email (see [§4](#4-accounts-roles-and-email)).
+
+### 2. Install
+
+```bash
+pip install -r ai-service/requirements.txt
+cd backend  && npm install && cd ..
+cd frontend && npm install && cd ..
+```
+
+### 3. Prepare the data
+
+```bash
+python scripts/build_processed_dataset.py   # combine + clean the raw CSVs
+python scripts/load_to_mysql.py             # load into `prgi_titles`
+python scripts/init_db.py                   # application tables + seed admin
+python scripts/build_faiss_index.py         # optional - LITE works without it
+```
+
+`init_db.py` also adds an indexed `normalized_title` column to `prgi_titles`,
+which turns the exact-duplicate check into a single index seek.
+
+### 4. Run
+
+```bash
+./start-all.sh          # Windows: start-all.bat
+```
+
+or in three terminals:
+
+```bash
+cd ai-service  &&  python -m uvicorn main:app --port 8000
+cd backend     &&  npm start
+cd frontend    &&  npm run dev
+```
+
+Open **http://localhost:3000**.
+
+### Checking it came up correctly
+
+`GET http://localhost:5000/api/health` reports all three dependencies, and the
+backend prints the same thing at startup:
 
 ```
-C:\PSS06\
-├── .env                          shared config for both services
+  API        : http://localhost:5000/api
+  MySQL      : connected (localhost:3306/prgi)
+  AI service : reachable (FULL mode, 160221 titles)
+  Email      : ready (you@gmail.com)
+```
+
+Anything reading `NOT CONNECTED`, `NOT REACHABLE` or `DISABLED` prints its own
+hint on the next line.
+
+---
+
+## 3. Repository layout
+
+```
+pss06-title-verification/
+├── .env                          shared config for both services  (git-ignored)
+├── .env.example                  the committed template
 ├── start-all.bat / start-all.sh  launch all three services
 │
 ├── data/
@@ -108,7 +214,8 @@ C:\PSS06\
 │   ├── controllers/
 │   ├── services/aiService.js       FastAPI client
 │   ├── services/databaseService.js all SQL
-│   ├── middleware/authMiddleware.js JWT
+│   ├── services/mailService.js     SMTP + the two email templates
+│   ├── middleware/authMiddleware.js JWT + the requireAdmin gate
 │   └── models/schema.sql           application schema
 │
 └── frontend/                     React · Vite
@@ -120,60 +227,69 @@ C:\PSS06\
         ├── components/             AppShell, AuthHeader, AuthBrandPanel, FormInput
         └── pages/                  Login · CreateAccount · EmailVerification
                                     Dashboard · VerificationResult · MyVerifications
+                                    AdminLogin · AdminDashboard · AdminReview
 ```
+
+`models/` and `node_modules/` are generated and deliberately absent from the
+repository — see [`models/README.md`](models/README.md).
 
 ---
 
-## 3. Setup
+## 4. Accounts, roles and email
 
-### Prerequisites
-- Python 3.10+
-- Node.js 18+
-- MySQL / MariaDB running, with `prgi_titles` already loaded
-- *(optional)* Ollama, for LLM-written explanations
+### Roles
 
-### One-time install
+There are two kinds of account, and the distinction is enforced **on the
+server**, not by hiding buttons:
 
-```bat
-cd C:\PSS06
+| Role | Can verify titles | Can accept/reject a queued title |
+|---|---|---|
+| `Verified Official` (applicant) | yes | no |
+| `Administrator` / `Verification Officer` | yes | yes |
 
-pip install -r ai-service\requirements.txt
+`scripts/init_db.py` seeds one administrator. Change its password immediately —
+it exists so a fresh clone has a way in, not as a permanent credential.
 
-cd backend  && npm install && cd ..
-cd frontend && npm install && cd ..
+Registration and Google sign-in both create **applicants**. Signing in with
+Google proves who you are; it does not confer review authority. The only Google
+addresses that keep administrator rights are the ones listed in `ADMIN_EMAILS`
+in `.env`:
+
+```ini
+ADMIN_EMAILS=admin@prgi.gov,officer@prgi.gov
 ```
 
-### Prepare the data
+The gate that matters is `requireAdmin` in
+`backend/middleware/authMiddleware.js`, applied to
+`PATCH /api/history/pending/:ref`. Hiding the sidebar item is cosmetic — anyone
+can still call the API with curl, so the role check lives on the endpoint that
+actually changes a title's fate.
 
-```bat
-python scripts\build_processed_dataset.py    :: if you have not already
-python scripts\load_to_mysql.py              :: if you have not already
-python scripts\init_db.py                    :: application tables + seed user
-python scripts\build_faiss_index.py          :: build and save the index
-```
+### Email
 
-`init_db.py` also adds an indexed `normalized_title` column to `prgi_titles`,
-which turns the exact-duplicate check into a single index seek.
+Two flows send mail, both through `backend/services/mailService.js`:
 
-### Run
+1. **Password reset** — `POST /api/auth/forgot-password` generates a new
+   password, stores its bcrypt hash and emails it. If delivery fails, the new
+   password is returned in the response and shown on screen instead, so nobody
+   is locked out by a mail misconfiguration.
+2. **Review decision** — when an officer accepts or rejects a queued title, the
+   applicant is emailed the outcome, the officer's written reason and the
+   application reference.
 
-```bat
-start-all.bat
-```
+A send failure never rolls back or hides the thing it was reporting: the
+password is still reset, the decision is still recorded, and the caller is told
+the mail did not go out.
 
-or in three terminals:
-
-```bat
-cd ai-service  &&  python -m uvicorn main:app --port 8000
-cd backend     &&  npm start
-cd frontend    &&  npm run dev
-```
-
-Open **http://localhost:3000** — log in with `admin@prgi.gov` / `admin123`.
+For Gmail you need an **app password**, not your account password — turn on
+2-Step Verification, then generate one at
+<https://myaccount.google.com/apppasswords> and put the 16 characters in
+`SMTP_PASS`. With `SMTP_*` unset the app runs normally; only the two flows above
+degrade.
 
 ---
 
-## 4. FULL mode vs LITE mode
+## 5. FULL mode vs LITE mode
 
 The AI service reports which one it is running, in the sidebar badge and at
 `GET /api/health`.
@@ -205,7 +321,7 @@ a silent downgrade.
 
 ---
 
-## 5. How a title is verified
+## 6. How a title is verified
 
 1. **normalize_title** — Unicode NFKC, punctuation stripped, upper-cased,
    stop-words removed, generic prefixes/suffixes peeled off to find the
@@ -255,7 +371,16 @@ similarity = 0.35·semantic + 0.25·reranker + 0.20·fuzzy
            + 0.10·phonetic + 0.10·token-overlap
 ```
 
-and then
+with one exception: a candidate whose normalised form is **identical** to the
+submitted title is pinned at exactly `1.0` rather than fused. The neural signals
+are bounded estimators — BGE-M3 cosine tops out near 0.99 and the cross-encoder
+sigmoid near 0.85 even on character-identical input — so the weighted average
+above can never reach 100 %. Reporting "94 % similar" for the same title would
+be wrong, and it would understate a hard conflict to the reviewing officer. The
+identity test is the same one rule R01 uses, so the retriever and the rule
+engine can never disagree about what counts as a duplicate.
+
+Then:
 
 ```
 verification probability = (1 − similarity) − Σ rule penalties      [clamped 0…1]
@@ -267,7 +392,7 @@ verified, and guideline violations push it lower still.
 
 ---
 
-## 6. Requirement coverage
+## 7. Requirement coverage
 
 | # | Requirement | Where it lives |
 |---|---|---|
@@ -292,7 +417,7 @@ verified, and guideline violations push it lower still.
 
 ---
 
-## 7. API
+## 8. API
 
 ### Node backend — `http://localhost:5000`
 
@@ -301,6 +426,8 @@ verified, and guideline violations push it lower still.
 | GET | `/api/health` | database + AI service status |
 | POST | `/api/auth/register` | create an account |
 | POST | `/api/auth/login` | sign in (bcrypt + JWT) |
+| POST | `/api/auth/google` | sign in with Google (creates an applicant account) |
+| POST | `/api/auth/forgot-password` | reset the password and email the new one |
 | GET | `/api/auth/me` | current session |
 | POST | `/api/titles/verify` | **verify a title** |
 | POST | `/api/titles/guidelines` | fast typing-time check |
@@ -309,7 +436,7 @@ verified, and guideline violations push it lower still.
 | GET | `/api/history` | verification ledger |
 | GET | `/api/history/:trackingId` | one record, with evidence and trace |
 | GET | `/api/history/pending/list` | live application queue |
-| PATCH | `/api/history/pending/:ref` | change an application's status |
+| PATCH | `/api/history/pending/:ref` | **officer decision** — accept/reject, emails the applicant *(admin only)* |
 | GET | `/api/dashboard/overview` | aggregates for the dashboard |
 
 ### AI service — `http://127.0.0.1:8000` (Swagger at `/docs`)
@@ -329,7 +456,7 @@ curl -X POST http://localhost:5000/api/titles/verify \
 
 ---
 
-## 8. Testing
+## 9. Testing
 
 Run the rule battery without any server:
 
@@ -344,7 +471,7 @@ titles and the agent trace.
 
 ---
 
-## 9. Tuning
+## 10. Tuning
 
 Everything tunable is in `.env` (mirrored in `ai-service/config.py`):
 
@@ -370,7 +497,7 @@ a domain officer can extend them without touching any logic.
 
 ---
 
-## 10. Known limits
+## 11. Known limits
 
 - Cross-language detection is only as good as `CONCEPT_LEXICON` in LITE mode;
   FULL mode adds genuine multilingual embeddings on top.
@@ -382,3 +509,28 @@ a domain officer can extend them without touching any logic.
   160 000 rows; load them and re-run `build_faiss_index.py`.
 - `pending_applications` grows without a retention policy; add one before
   production.
+
+---
+
+## 12. License
+
+Released under the [MIT License](LICENSE).
+
+The CSV files under `data/` are derived from publicly available PRGI title
+records, are included only to make the system reproducible, and are **not**
+covered by that licence — they remain subject to the original publisher's terms.
+
+## Acknowledgements
+
+- [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3) and
+  [bge-reranker-v2-m3](https://huggingface.co/BAAI/bge-reranker-v2-m3) — multilingual
+  retrieval and reranking
+- [FAISS](https://github.com/facebookresearch/faiss) — vector search
+- [Ollama](https://ollama.com/) — local LLM for the explanation layer
+- [lucide](https://lucide.dev/) — icons
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). The one rule worth repeating: **the LLM
+never decides.** A change that lets model output influence a verdict will be
+rejected however good the output looks.

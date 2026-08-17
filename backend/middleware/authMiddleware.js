@@ -2,6 +2,7 @@
  * PSS06 - JWT authentication middleware.
  */
 
+import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
 import path from 'path';
@@ -11,8 +12,51 @@ import { databaseService } from '../services/databaseService.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
-export const JWT_SECRET =
-  process.env.JWT_SECRET || 'pss06_prgi_title_verification_secret_key_2026';
+/**
+ * The signing key for every session token in the system.
+ *
+ * There is deliberately NO hard-coded fallback. A literal default committed to
+ * a public repository is not a default, it is a published master key: anyone
+ * who can read this file could mint a token claiming role "Administrator" and
+ * walk straight into the review queue of any deployment that forgot to set the
+ * variable.
+ *
+ * In production we refuse to start. In development we generate a random key
+ * per boot, which keeps `npm start` working out of the box while making the
+ * consequence obvious - every restart signs everybody out until a real
+ * JWT_SECRET is put in .env.
+ */
+function resolveJwtSecret() {
+  const configured = process.env.JWT_SECRET;
+  if (configured && configured.length >= 32) return configured;
+
+  if (configured) {
+    throw new Error(
+      'JWT_SECRET is set but shorter than 32 characters. Use a long random '
+      + 'string, e.g.  node -e "console.log(require(\'crypto\')'
+      + '.randomBytes(48).toString(\'hex\'))"'
+    );
+  }
+
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      'JWT_SECRET is not set. Refusing to start in production with an '
+      + 'ephemeral signing key. Add JWT_SECRET to your .env file.'
+    );
+  }
+
+  const ephemeral = crypto.randomBytes(48).toString('hex');
+  console.warn(
+    '\n[auth] WARNING: JWT_SECRET is not set in .env.\n'
+    + '[auth] Using a random key generated for this process only - every '
+    + 'restart will invalidate all sessions.\n'
+    + '[auth] Add this line to your .env to make sessions persist:\n'
+    + `[auth]   JWT_SECRET=${ephemeral}\n`
+  );
+  return ephemeral;
+}
+
+export const JWT_SECRET = resolveJwtSecret();
 export const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
 
 export function signToken(user) {

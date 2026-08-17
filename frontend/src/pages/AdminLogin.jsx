@@ -17,9 +17,9 @@ import AuthBrandPanel from '../components/AuthBrandPanel';
 import { api, tokenStore } from '../api/client';
 
 export const AdminLogin = ({ onNavigate, onLoginSuccess }) => {
-  const [email, setEmail] = useState('admin@prgi.gov');
-  const [adminId, setAdminId] = useState('usr_admin_01');
-  const [password, setPassword] = useState('admin123');
+  const [email, setEmail] = useState('');
+  const [adminId, setAdminId] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [rememberDevice, setRememberDevice] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -74,11 +74,15 @@ export const AdminLogin = ({ onNavigate, onLoginSuccess }) => {
         onNavigate('admin-dashboard');
       }
     } catch (err) {
+      // A failed sign-in must never grant access. The previous build navigated
+      // to the admin dashboard here as a "demo fallback", which reads as an
+      // authentication bypass to anyone auditing this file.
       console.error('[AdminLogin] error:', err);
-      // Demo fallback: navigate directly to admin dashboard
-      if (onNavigate) {
-        onNavigate('admin-dashboard');
-      }
+      setErrorMsg(
+        err?.status === 401 || err?.status === 403
+          ? 'Invalid administrator credentials.'
+          : (err?.message || 'Could not reach the authentication server.')
+      );
     } finally {
       setLoading(false);
     }

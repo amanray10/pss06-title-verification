@@ -5,10 +5,33 @@
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { databaseService } from '../services/databaseService.js';
-import { signToken, publicUser } from '../middleware/authMiddleware.js';
+import { signToken, publicUser, isReviewer } from '../middleware/authMiddleware.js';
+import { sendMail, passwordResetEmail } from '../services/mailService.js';
 
 const SALT_ROUNDS = 10;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+/** Role given to anyone who signs in through the public (non-admin) door. */
+const APPLICANT_ROLE = 'Verified Official';
+
+/**
+ * The only Google accounts that are allowed to keep review authority.
+ * Everyone else who signs in with Google is an ordinary applicant.
+ * Set in .env, e.g.  ADMIN_EMAILS=admin@prgi.gov,officer@prgi.gov
+ */
+const ADMIN_EMAILS = String(process.env.ADMIN_EMAILS || 'admin@prgi.gov')
+  .split(',')
+  .map((e) => e.trim().toLowerCase())
+  .filter(Boolean);
+
+/** Human-readable, easy to retype, still unguessable. */
+function generatePassword() {
+  const words = ['Prgi', 'Title', 'Press', 'Verify', 'Registry', 'Bharat'];
+  const word = words[crypto.randomInt(0, words.length)];
+  const digits = String(crypto.randomInt(1000, 9999));
+  const tail = crypto.randomBytes(2).toString('hex');
+  return `${word}@${digits}${tail}`;
+}
 
 export const authController = {
   // POST /api/auth/register
@@ -195,6 +218,9 @@ export const authController = {
         });
       }
 
+      const emailLc = String(email).trim().toLowerCase();
+      const allowedAdmin = ADMIN_EMAILS.includes(emailLc);
+
       let user = await databaseService.findUserByEmail(email);
 
       if (!user) {
@@ -206,11 +232,24 @@ export const authController = {
           email,
           mobile: null,
           organization: 'Google Verified User',
-          passwordHash: dummyHash,
-          role: 'Administrator'
+          // Signing in with Google proves who you are - it does not grant PRGI
+          // review authority. Admins come in through /admin/login with issued
+          // credentials, or must be listed in ADMIN_EMAILS.
+          role: allowedAdmin ? 'Administrator' : APPLICANT_ROLE
         });
         await databaseService.setUserVerified(id);
         user = await databaseService.findUserById(id);
+      } else if (
+        !allowedAdmin
+        && isReviewer(user)
+        && String(user.organization || '') === 'Google Verified User'
+      ) {
+        // Repair accounts created by the earlier build, which handed every
+        // Google sign-in the Administrator role. Only auto-provisioned Google
+        // accounts are touched - real staff accounts are left alone.
+        console.warn(`[auth] demoting mis-provisioned Google account ${user.email} `
+          + `from "${user.role}" to "${APPLICANT_ROLE}"`);
+        user = await databaseService.setUserRole(user.id, APPLICANT_ROLE);
       }
 
       return res.status(200).json({
@@ -224,6 +263,72 @@ export const authController = {
       return res.status(500).json({
         success: false,
         message: 'Google login failed on server.'
+      });
+    }
+  },
+
+  // POST /api/auth/forgot-password
+  //
+  // Generates a fresh password, saves its bcrypt hash, and emails it to the
+  // applicant. If the message cannot actually be delivered (no such mailbox,
+  // SMTP down, credentials wrong) the new password is returned in the response
+  // so the applicant is never locked out of the system.
+  async forgotPassword(req, res) {
+    try {
+      const email = String(req.body?.email || '').trim();
+
+      if (!email || !EMAIL_RE.test(email)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Please enter a valid email address.'
+        });
+      }
+
+      const user = await databaseService.findUserByEmail(email);
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          message: 'No account is registered with this email address. '
+            + 'Please check the address or register a new account.'
+        });
+      }
+
+      const newPassword = generatePassword();
+      const passwordHash = await bcrypt.hash(newPassword, SALT_ROUNDS);
+      await databaseService.updateUserPassword(user.id, passwordHash);
+
+      const { subject, html } = passwordResetEmail({
+        name: user.username,
+        password: newPassword
+      });
+      const delivery = await sendMail({ to: user.email, subject, html });
+
+      if (delivery.sent) {
+        return res.json({
+          success: true,
+          delivered: true,
+          message: `A new password has been sent to ${user.email}. `
+            + 'Please check your inbox (and the spam folder).'
+        });
+      }
+
+      // Undeliverable - fall back to showing it on screen.
+      console.warn(`[auth] password reset for ${user.email} could not be emailed:`,
+        delivery.error);
+      return res.json({
+        success: true,
+        delivered: false,
+        password: newPassword,
+        message: 'Your password has been reset, but the email could not be '
+          + 'delivered to that address. Please note down the new password '
+          + 'shown below - it will not be displayed again.',
+        detail: delivery.error
+      });
+    } catch (err) {
+      console.error('[auth] forgotPassword failed:', err);
+      return res.status(500).json({
+        success: false,
+        message: 'Password reset failed. Is the database running?'
       });
     }
   },

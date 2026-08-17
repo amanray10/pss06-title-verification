@@ -1,6 +1,9 @@
 import React, { useState } from 'react';
 import { useGoogleLogin } from '@react-oauth/google';
-import { Mail, Lock, ArrowRight, Building2, Check, AlertCircle } from 'lucide-react';
+import {
+  Mail, Lock, ArrowRight, Building2, Check, AlertCircle,
+  X, KeyRound, Send, Copy, CheckCircle2
+} from 'lucide-react';
 import AuthHeader from '../components/AuthHeader';
 import AuthBrandPanel from '../components/AuthBrandPanel';
 import FormInput from '../components/FormInput';
@@ -12,6 +15,58 @@ export const Login = ({ onNavigate, onLoginSuccess }) => {
   const [rememberMe, setRememberMe] = useState(true);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+
+  // --- forgot-password modal state ----------------------------------------
+  const [forgotOpen, setForgotOpen] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotBusy, setForgotBusy] = useState(false);
+  const [forgotError, setForgotError] = useState('');
+  const [forgotResult, setForgotResult] = useState(null); // { delivered, message, password }
+  const [copied, setCopied] = useState(false);
+
+  const openForgot = () => {
+    setForgotEmail(email || '');
+    setForgotError('');
+    setForgotResult(null);
+    setCopied(false);
+    setForgotOpen(true);
+  };
+
+  const closeForgot = () => {
+    setForgotOpen(false);
+    setForgotBusy(false);
+    setForgotError('');
+    setForgotResult(null);
+  };
+
+  const handleForgotSubmit = async (e) => {
+    e?.preventDefault();
+    setForgotError('');
+
+    const addr = forgotEmail.trim();
+    if (!addr) {
+      setForgotError('Please enter your registered email address.');
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(addr)) {
+      setForgotError('Please enter a valid email address.');
+      return;
+    }
+
+    setForgotBusy(true);
+    try {
+      const data = await api.forgotPassword(addr);
+      setForgotResult({
+        delivered: Boolean(data.delivered),
+        message: data.message,
+        password: data.password || null
+      });
+    } catch (err) {
+      setForgotError(err.message || 'Password reset failed. Please try again.');
+    } finally {
+      setForgotBusy(false);
+    }
+  };
 
   const handleGoogleLogin = useGoogleLogin({
     scope: 'email profile openid',
@@ -168,7 +223,7 @@ export const Login = ({ onNavigate, onLoginSuccess }) => {
                 iconLeft={<Lock size={16} />}
                 labelRightLink={{
                   text: 'Forgot password',
-                  onClick: () => alert('A password reset link has been dispatched to your institutional email.')
+                  onClick: openForgot
                 }}
                 required
               />
@@ -261,6 +316,204 @@ export const Login = ({ onNavigate, onLoginSuccess }) => {
           </div>
         </div>
       </main>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Forgot password                                                     */}
+      {/* ------------------------------------------------------------------ */}
+      {forgotOpen && (
+        <div
+          onClick={(e) => { if (e.target === e.currentTarget && !forgotBusy) closeForgot(); }}
+          style={{
+            position: 'fixed', inset: 0, zIndex: 1000,
+            backgroundColor: 'rgba(15, 23, 42, 0.55)',
+            backdropFilter: 'blur(3px)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: '20px'
+          }}
+        >
+          <div style={{
+            width: '100%', maxWidth: '460px',
+            backgroundColor: '#ffffff', borderRadius: '16px',
+            border: '1px solid #e2e8f0',
+            boxShadow: '0 24px 60px rgba(12, 30, 61, 0.28)',
+            overflow: 'hidden'
+          }}>
+            {/* header */}
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: '12px',
+              padding: '20px 24px', borderBottom: '1px solid #e2e8f0',
+              backgroundColor: '#f8fafc'
+            }}>
+              <div style={{
+                width: 38, height: 38, borderRadius: 10,
+                backgroundColor: '#e0edfa', color: '#02529c',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0
+              }}>
+                <KeyRound size={19} strokeWidth={2.2} />
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <h3 style={{ margin: 0, fontSize: '1.02rem', fontWeight: 800, color: '#0f172a' }}>
+                  Reset your password
+                </h3>
+                <p style={{ margin: '2px 0 0 0', fontSize: '0.78rem', color: '#64748b' }}>
+                  We will email a new password to your registered address.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeForgot}
+                disabled={forgotBusy}
+                aria-label="Close"
+                style={{
+                  border: 'none', background: 'transparent', cursor: forgotBusy ? 'default' : 'pointer',
+                  color: '#94a3b8', padding: 4, borderRadius: 6, lineHeight: 0
+                }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* body */}
+            <div style={{ padding: '22px 24px 24px 24px' }}>
+              {!forgotResult ? (
+                <form onSubmit={handleForgotSubmit}>
+                  <label style={{
+                    display: 'block', fontSize: '0.78rem', fontWeight: 700,
+                    color: '#334155', marginBottom: 7, letterSpacing: '.2px'
+                  }}>
+                    Registered Email Address
+                  </label>
+                  <div style={{ position: 'relative' }}>
+                    <Mail
+                      size={16}
+                      style={{
+                        position: 'absolute', left: 12, top: '50%',
+                        transform: 'translateY(-50%)', color: '#94a3b8', pointerEvents: 'none'
+                      }}
+                    />
+                    <input
+                      type="email"
+                      autoFocus
+                      value={forgotEmail}
+                      onChange={(e) => { setForgotError(''); setForgotEmail(e.target.value); }}
+                      placeholder="name@institution.gov"
+                      disabled={forgotBusy}
+                      style={{
+                        width: '100%', boxSizing: 'border-box',
+                        padding: '11px 13px 11px 36px',
+                        border: `1px solid ${forgotError ? '#fca5a5' : '#cbd5e1'}`,
+                        borderRadius: 9, fontSize: '0.88rem', color: '#0f172a',
+                        outline: 'none', backgroundColor: forgotBusy ? '#f8fafc' : '#ffffff'
+                      }}
+                    />
+                  </div>
+
+                  {forgotError && (
+                    <div style={{
+                      display: 'flex', alignItems: 'flex-start', gap: 8,
+                      marginTop: 12, padding: '10px 12px',
+                      backgroundColor: '#fef2f2', border: '1px solid #fecaca',
+                      borderRadius: 8, color: '#dc2626',
+                      fontSize: '0.79rem', fontWeight: 600, lineHeight: 1.45
+                    }}>
+                      <AlertCircle size={15} style={{ flexShrink: 0, marginTop: 1 }} />
+                      <span>{forgotError}</span>
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
+                    <button
+                      type="button"
+                      className="btn btn-outline"
+                      onClick={closeForgot}
+                      disabled={forgotBusy}
+                      style={{ flex: '0 0 auto' }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      className="btn btn-primary"
+                      disabled={forgotBusy}
+                      style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
+                    >
+                      {forgotBusy ? 'Sending new password...' : (
+                        <>
+                          <Send size={16} strokeWidth={2.2} />
+                          <span>Send New Password</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <div>
+                  <div style={{
+                    display: 'flex', alignItems: 'flex-start', gap: 10,
+                    padding: '12px 14px', borderRadius: 9,
+                    backgroundColor: forgotResult.delivered ? '#f0fdf4' : '#fffbeb',
+                    border: `1px solid ${forgotResult.delivered ? '#bbf7d0' : '#fde68a'}`,
+                    color: forgotResult.delivered ? '#15803d' : '#92400e',
+                    fontSize: '0.82rem', fontWeight: 600, lineHeight: 1.5
+                  }}>
+                    {forgotResult.delivered
+                      ? <CheckCircle2 size={16} style={{ flexShrink: 0, marginTop: 2 }} />
+                      : <AlertCircle size={16} style={{ flexShrink: 0, marginTop: 2 }} />}
+                    <span>{forgotResult.message}</span>
+                  </div>
+
+                  {forgotResult.password && (
+                    <div style={{
+                      marginTop: 16, padding: '16px 18px',
+                      backgroundColor: '#f1f5f9', border: '1px dashed #94a3b8',
+                      borderRadius: 10, textAlign: 'center'
+                    }}>
+                      <div style={{
+                        fontSize: '0.66rem', letterSpacing: '1px', textTransform: 'uppercase',
+                        color: '#64748b', fontWeight: 800
+                      }}>
+                        Your new password
+                      </div>
+                      <div style={{
+                        fontFamily: 'Consolas, Menlo, monospace', fontSize: '1.25rem',
+                        fontWeight: 800, letterSpacing: '1.5px', color: '#02529c', margin: '8px 0 12px 0',
+                        wordBreak: 'break-all'
+                      }}>
+                        {forgotResult.password}
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-outline"
+                        onClick={() => {
+                          navigator.clipboard?.writeText(forgotResult.password);
+                          setCopied(true);
+                          setTimeout(() => setCopied(false), 2000);
+                        }}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: '0.8rem' }}
+                      >
+                        {copied ? <Check size={14} /> : <Copy size={14} />}
+                        <span>{copied ? 'Copied' : 'Copy password'}</span>
+                      </button>
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-full"
+                    onClick={() => {
+                      if (forgotEmail.trim()) setEmail(forgotEmail.trim());
+                      closeForgot();
+                    }}
+                    style={{ marginTop: 18 }}
+                  >
+                    Back to Sign In
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

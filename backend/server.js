@@ -22,6 +22,7 @@ import historyRoutes from './routes/historyRoutes.js';
 import dashboardRoutes from './routes/dashboardRoutes.js';
 import { checkConnection, dbConfig } from './config/db.js';
 import { aiService } from './services/aiService.js';
+import { verifyMailer } from './services/mailService.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, '../.env') });
@@ -44,7 +45,9 @@ app.use((req, _res, next) => {
 app.get('/api/health', async (_req, res) => {
   const db = await checkConnection();
   const ai = await aiService.safeHealth();
+  const mail = await verifyMailer();
   res.json({
+    mail: { ready: mail.ok, account: mail.user || null, reason: mail.reason || null },
     status: 'ok',
     system: 'PSS06 - PRGI Title Verification System',
     version: '1.0.0',
@@ -86,6 +89,7 @@ app.use((err, _req, res, _next) => {
 async function start() {
   const db = await checkConnection();
   const ai = await aiService.safeHealth();
+  const mail = await verifyMailer();
 
   app.listen(PORT, () => {
     const line = '='.repeat(64);
@@ -97,6 +101,11 @@ async function start() {
       + `(${dbConfig.host}:${dbConfig.port}/${dbConfig.database})`);
     console.log(`  AI service : ${ai.reachable ? `reachable (${ai.engine?.mode} mode, `
       + `${ai.engine?.corpusSize} titles)` : `NOT REACHABLE at ${aiService.baseUrl}`}`);
+    console.log(`  Email      : ${mail.ok ? `ready (${mail.user})` : `DISABLED - ${mail.reason}`}`);
+    if (!mail.ok) {
+      console.log('  hint       : check SMTP_USER / SMTP_PASS in .env, and run '
+        + '"npm install nodemailer" inside backend/');
+    }
     if (!db) {
       console.log('  hint       : start MySQL, then run  python scripts/init_db.py');
     }

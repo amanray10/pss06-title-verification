@@ -131,17 +131,29 @@ export const AdminReview = ({ applicationRef, user, onNavigate, onLogout }) => {
         reason: trimmed
       });
 
-      const message = activeModal === 'ACCEPT'
+      const base = activeModal === 'ACCEPT'
         ? 'Title accepted successfully.'
-          : 'Title rejected successfully.';
+        : 'Title rejected successfully.';
 
-      setToastMessage({ type: 'success', text: message });
+      // The backend emails the applicant the outcome; report whether it landed.
+      const note = res?.notification;
+      let message = base;
+      let type = 'success';
+      if (note?.sent) {
+        message = `${base} The applicant has been notified at ${note.to}.`;
+      } else if (note?.attempted) {
+        message = `${base} However, the notification email could not be sent`
+          + `${note.error ? ` (${note.error})` : ''}.`;
+        type = 'warning';
+      }
+
+      setToastMessage({ type, text: message });
       setActiveModal(null);
 
       // Return to dashboard after brief toast display
       setTimeout(() => {
         onNavigate?.('admin-dashboard');
-      }, 1200);
+      }, note?.sent === false ? 4000 : 1600);
     } catch (err) {
       console.error('[AdminReview] decision update failed:', err);
       setReasonError(err.message || 'Unable to update application status. Please try again.');
@@ -222,18 +234,21 @@ export const AdminReview = ({ applicationRef, user, onNavigate, onLogout }) => {
             top: 24,
             right: 24,
             zIndex: 9999,
-            backgroundColor: toastMessage.type === 'success' ? '#059669' : '#dc2626',
+            backgroundColor: toastMessage.type === 'success' ? '#059669'
+              : toastMessage.type === 'warning' ? '#b45309' : '#dc2626',
             color: '#ffffff',
             padding: '12px 20px',
             borderRadius: 10,
+            maxWidth: 460,
             boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
             display: 'flex',
-            alignItems: 'center',
+            alignItems: 'flex-start',
             gap: 10,
-            fontSize: '0.9rem',
+            fontSize: '0.88rem',
+            lineHeight: 1.45,
             fontWeight: 700
           }}>
-            <CheckCircle2 size={20} />
+            <CheckCircle2 size={20} style={{ flexShrink: 0, marginTop: 1 }} />
             <span>{toastMessage.text}</span>
           </div>
         )}

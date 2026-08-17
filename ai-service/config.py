@@ -91,6 +91,8 @@ THRESHOLDS = {
     "core_overlap": float(os.getenv("T_CORE_OVERLAP", "0.80")),
     # Cross-language semantic equivalence.
     "cross_language": float(os.getenv("T_CROSS_LANGUAGE", "0.82")),
+    # nonsense phonetics 
+    "nonsense_perplexity": float(os.getenv("T_NONSENSE_PERPLEXITY", "4.2")),
 }
 
 # Weights used to fuse the individual similarity signals into one score.
@@ -116,4 +118,6 @@ RULE_PENALTIES = {
     "PENDING_APPLICATION_CONFLICT": 0.60,
     "TITLE_TOO_SHORT": 0.35,
     "INVALID_CHARACTERS": 0.30,
+    "NONSENSE_TITLE": 0.60,
+    "OFFENSIVE_LANGUAGE": 1.00,
 }

@@ -31,6 +31,8 @@ R12 HIGH_SIMILARITY             blocker   requirement 1.d
 R13 MODERATE_SIMILARITY         major     requirement 1.d
 R14 PENDING_APPLICATION_CONFLICT major    requirement 5.b
 R15 SENSITIVE_WORD              minor     policy
+R16 NONSENSE_TITLE              major     requirement 1.b / sanity
+R17 OFFENSIVE_LANGUAGE          blocker   policy
 """
 
 import logging
@@ -49,6 +51,10 @@ from rules.lexicons import (
     GENERIC_SUFFIXES,
     PERIODICITY_WORDS,
 )
+
+from rules.nonsense_detector import title_is_meaningless
+from better_profanity import profanity
+profanity.load_censor_words()
 
 log = logging.getLogger("pss06.rules")
 
@@ -127,7 +133,9 @@ class RuleEngine:
         # --- content guidelines (independent of the registry) ------------
         self._check_disallowed_words(norm, findings, passed)
         self._check_sensitive_words(norm, findings, passed)
+        self._check_offensive_language(norm, findings, passed)
         self._check_structure(norm, findings, passed)
+        self._check_nonsense_title(norm, findings, passed)
 
         # --- registry collision rules ------------------------------------
         self._check_exact_duplicate(norm, findings, passed)
@@ -248,6 +256,70 @@ class RuleEngine:
                 evidence={"normalized": norm.normalized},
                 penalty=self.penalties["INVALID_CHARACTERS"],
             ))
+    # =====================================================================
+    # R16 - title carries no meaning at all (gibberish / keyboard mash)
+    # =====================================================================
+    def _check_nonsense_title(self, norm, findings, passed):
+        model = getattr(self.corpus, "ngram_model", None)
+        if model is None:
+            # Model not built yet - skip rather than false-positive on
+            # every title.
+            return
+
+        distinctive = [
+            t for t in norm.tokens
+            if t not in GENERIC_PREFIXES and t not in GENERIC_SUFFIXES
+            and t not in PERIODICITY_WORDS
+        ]
+        if not distinctive:
+            return  # R03 already handles "no distinctive word at all"
+
+        is_meaningless, detail = title_is_meaningless(
+            distinctive, model, self.t["nonsense_perplexity"]
+        )
+
+        if is_meaningless:
+            findings.append(Finding(
+                code="R16",
+                rule="NONSENSE_TITLE",
+                severity=MAJOR,
+                requirement="1.b / sanity",
+                message=(
+                    "The title does not correspond to a recognisable word in "
+                    "any language on record and does not follow the letter "
+                    "patterns of a real word or name. A title must carry "
+                    "some meaning or be a plausible coined name."
+                ),
+                evidence={
+                    "tokens": distinctive,
+                    "scores": {tok: round(score, 3) for tok, score in detail},
+                    "threshold": self.t["nonsense_perplexity"],
+                },
+                penalty=self.penalties["NONSENSE_TITLE"],
+            ))
+        else:
+            passed.append("Title tokens are recognisable words or plausible names")
+
+    # =====================================================================
+    # R17 - profane / abusive language
+    # =====================================================================
+    def _check_offensive_language(self, norm, findings, passed):
+        if profanity.contains_profanity(norm.raw):
+            findings.append(Finding(
+                code="R17",
+                rule="OFFENSIVE_LANGUAGE",
+                severity=BLOCKER,
+                requirement="policy",
+                message=(
+                    "The title contains profane or abusive language, which "
+                    "is not permitted in a publication title regardless of "
+                    "context."
+                ),
+                evidence={"raw": norm.raw},
+                penalty=self.penalties["OFFENSIVE_LANGUAGE"],
+            ))
+        else:
+            passed.append("No profane or abusive language detected")
 
     # =====================================================================
     # R01 - exact duplicate

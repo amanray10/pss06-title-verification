@@ -49,3 +49,4 @@ jellyfish>=1.1.3
 #  Without these the service runs in LITE mode: same rules, same decisions,
 #  TF-IDF character n-grams instead of neural retrieval.
 # ===========================================================================
+better-profanity>=0.7.0

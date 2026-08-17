@@ -84,11 +84,21 @@ ORDER BY title ASC, registration_number ASC
 # The ORDER BY is not cosmetic: the vector index stores row numbers, so the
 # corpus must come back in the same order every single time.
 
+# Which queue statuses hold a live claim on a title?
+#
+#   PENDING / UNDER_REVIEW / MANUAL_REVIEW - claimed, awaiting a decision
+#   APPROVED / ACCEPTED                    - claimed, decision granted
+#   REJECTED / WITHDRAWN                   - claim released, must NOT block
+#
+# Getting this list wrong is silent: a title an officer just approved would
+# stop blocking later look-alikes and two identical mastheads could both pass.
 PENDING_SQL = """
 SELECT id, application_ref, title, language, periodicity, publisher,
        publication_state, status, submitted_at
 FROM pending_applications
-WHERE status IN ('PENDING', 'UNDER_REVIEW')
+WHERE status IN ('PENDING', 'UNDER_REVIEW', 'MANUAL_REVIEW',
+                 'APPROVED', 'ACCEPTED')
+ORDER BY submitted_at ASC, id ASC
 """
 
 

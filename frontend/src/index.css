@@ -2992,3 +2992,15 @@ input, select, textarea {
   gap: 0;
   line-height: 1.05;
 }
+
+/* Marks a row whose outcome came from a human officer, not the engine. */
+.gov-decided-note {
+  margin-top: 4px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+.gov-decided-note.pending { color: var(--color-review-text); }

@@ -18,7 +18,7 @@ import { api } from '../api/client';
 const STATUS_FILTERS = [
   { id: 'ALL', label: 'All Outcomes' },
   { id: 'ACCEPT', label: 'Accepted' },
-  { id: 'REVIEW', label: 'Manual Review' },
+  { id: 'REVIEW', label: 'Awaiting Review' },
   { id: 'REJECT', label: 'Rejected' }
 ];
 
@@ -313,6 +313,16 @@ export const MyVerifications = ({ user, onNavigate, onLogout, onSelectVerificati
                       <span className={`gov-status-badge ${meta.cls}`}>
                         <meta.Icon size={12} strokeWidth={2.5} /> {meta.label}
                       </span>
+                      {item.decidedByOfficer ? (
+                        <div className="gov-decided-note"
+                             title={item.reviewReason || ''}>
+                          by {item.reviewedBy || 'officer'} after review
+                        </div>
+                      ) : item.aiDecision === 'REVIEW' ? (
+                        <div className="gov-decided-note pending">
+                          awaiting officer decision
+                        </div>
+                      ) : null}
                     </td>
                     <td className="gov-td-date">{fmtDate(item.createdAt)}</td>
                     <td style={{ textAlign: 'right' }}>

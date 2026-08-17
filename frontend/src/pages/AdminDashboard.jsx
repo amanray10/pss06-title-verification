@@ -50,52 +50,15 @@ const scoreColor = (score) => {
   return '#059669';
 };
 
-const DEFAULT_APPLICATIONS = [
-  {
-    id: 1,
-    applicationRef: 'APP-2026-DNI01',
-    title: 'Daily News India',
-    submittedByName: 'Rahul Sharma',
-    similarityScore: 87,
-    mostSimilarTitle: 'Daily News',
-    submittedAt: '2026-08-16T14:30:00Z',
-    status: 'PENDING',
-    language: 'English',
-    publisher: 'Sharma Media Group'
-  },
-  {
-    id: 2,
-    applicationRef: 'APP-2026-NC02',
-    title: 'National Chronicle',
-    submittedByName: 'Priya Mehta',
-    similarityScore: 74,
-    mostSimilarTitle: 'National Chronicle India',
-    submittedAt: '2026-08-16T12:00:00Z',
-    status: 'PENDING',
-    language: 'English',
-    publisher: 'Chronicle Publications Ltd'
-  },
-  {
-    id: 3,
-    applicationRef: 'APP-2026-ITE03',
-    title: 'India Today Express',
-    submittedByName: 'Amit Kumar',
-    similarityScore: 92,
-    mostSimilarTitle: 'India Today',
-    submittedAt: '2026-08-15T16:00:00Z',
-    status: 'PENDING',
-    language: 'English',
-    publisher: 'Express Network India'
-  }
-];
-
 export const AdminDashboard = ({ user, onNavigate, onLogout, onSelectReview }) => {
   const [applications, setApplications] = useState([]);
+  // Starts at zero and is replaced by whatever the database actually
+  // reports. No placeholder figures - an empty system shows zeroes.
   const [stats, setStats] = useState({
-    pendingReviews: 24,
-    acceptedToday: 18,
-    rejectedToday: 4,
-    totalRequests: 1248
+    pendingReviews: 0,
+    acceptedToday: 0,
+    rejectedToday: 0,
+    totalRequests: 0
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -111,17 +74,12 @@ export const AdminDashboard = ({ user, onNavigate, onLogout, onSelectReview }) =
         api.adminPendingList({ scope: 'all', status: 'ALL', includeDecided: true })
       ]);
 
-      if (statsRes?.stats && (statsRes.stats.pendingReviews > 0 || statsRes.stats.totalRequests > 0)) {
-        setStats(statsRes.stats);
-      }
-      
-      const apps = listRes.applications && listRes.applications.length > 0
-        ? listRes.applications
-        : DEFAULT_APPLICATIONS;
-      setApplications(apps);
+      if (statsRes?.stats) setStats(statsRes.stats);
+      setApplications(listRes.applications || []);
     } catch (err) {
       console.error('[AdminDashboard] failed to load review data:', err);
-      setApplications(DEFAULT_APPLICATIONS);
+      setError(err.message || 'Could not load the review queue.');
+      setApplications([]);
     } finally {
       setLoading(false);
       setRefreshing(false);

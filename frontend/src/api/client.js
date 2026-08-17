@@ -119,10 +119,11 @@ export const api = {
   adminPendingDetail: (applicationRef) =>
     request(`/api/history/pending/detail/${encodeURIComponent(applicationRef)}`),
 
-  adminUpdateDecision: (applicationRef, { status, rejectionReason } = {}) =>
+  adminUpdateDecision: (applicationRef, { status, reason } = {}) =>
     request(`/api/history/pending/${encodeURIComponent(applicationRef)}`, {
       method: 'PATCH',
-      body: { status, rejectionReason }
+      // `reason` is required for both ACCEPT and REJECT - the server enforces it.
+      body: { status, reason }
     }),
 
   health: () => request('/api/health', { auth: false })

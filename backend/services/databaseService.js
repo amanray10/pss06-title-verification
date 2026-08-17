@@ -28,6 +28,25 @@ export function makeApplicationRef() {
   return `APP-${year}-${rand}`;
 }
 
+// ---------------------------------------------------------------------------
+// Final outcome vs AI verdict.
+//
+// verification_results.decision is what the ENGINE decided and never changes -
+// it is the audit record of the automated verdict. pending_applications.status
+// is what a human OFFICER later decided. The dashboard must show the officer's
+// word when there is one, otherwise a title an admin rejected would sit on the
+// applicant's screen saying "Manual Review" forever.
+// ---------------------------------------------------------------------------
+const FINAL_DECISION_SQL = `
+  CASE
+    WHEN p.status IN ('ACCEPTED','APPROVED') THEN 'ACCEPT'
+    WHEN p.status = 'REJECTED'               THEN 'REJECT'
+    ELSE v.decision
+  END`;
+
+const REVIEW_JOIN_SQL =
+  'LEFT JOIN pending_applications p ON p.verification_id = v.id';
+
 export const databaseService = {
   // =======================================================================
   // Users
@@ -177,29 +196,43 @@ export const databaseService = {
     const where = [];
     const params = [];
 
-    if (userId) { where.push('user_id = ?'); params.push(userId); }
-    if (decision && decision !== 'ALL') { where.push('decision = ?'); params.push(decision); }
+    if (userId) { where.push('v.user_id = ?'); params.push(userId); }
     if (search) {
-      where.push('(submitted_title LIKE ? OR tracking_id LIKE ? OR publisher LIKE ?)');
+      where.push('(v.submitted_title LIKE ? OR v.tracking_id LIKE ? OR v.publisher LIKE ?)');
       const like = `%${search}%`;
       params.push(like, like, like);
+    }
+    // Filter on the FINAL outcome, so "Rejected" in the UI finds titles an
+    // officer rejected as well as ones the engine rejected outright.
+    if (decision && decision !== 'ALL') {
+      where.push(`${FINAL_DECISION_SQL} = ?`);
+      params.push(decision);
     }
 
     const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const rows = await query(
-      `SELECT id, tracking_id, submitted_title, normalized_title, language,
-              publication_type, publisher, decision, similarity_score,
-              verification_probability, confidence, explanation,
-              explanation_source, findings, suggestions, created_at
-       FROM verification_results
+      `SELECT v.id, v.tracking_id, v.submitted_title, v.normalized_title,
+              v.language, v.publication_type, v.publisher, v.decision,
+              v.similarity_score, v.verification_probability, v.confidence,
+              v.explanation, v.explanation_source, v.findings, v.suggestions,
+              v.created_at,
+              p.status        AS review_status,
+              p.application_ref AS application_ref,
+              p.reviewed_by   AS reviewed_by,
+              p.reviewed_at   AS reviewed_at,
+              p.review_reason AS review_reason,
+              ${FINAL_DECISION_SQL} AS final_decision
+       FROM verification_results v
+       ${REVIEW_JOIN_SQL}
        ${clause}
-       ORDER BY created_at DESC, id DESC
+       ORDER BY v.created_at DESC, v.id DESC
        LIMIT ${Number(limit)} OFFSET ${Number(offset)}`,
       params
     );
 
     const [{ total }] = await query(
-      `SELECT COUNT(*) AS total FROM verification_results ${clause}`, params
+      `SELECT COUNT(*) AS total FROM verification_results v ${REVIEW_JOIN_SQL} ${clause}`,
+      params
     );
 
     return { rows: rows.map(mapVerificationRow), total: Number(total) };
@@ -207,11 +240,20 @@ export const databaseService = {
 
   async getVerification(trackingId, userId = null) {
     const params = [trackingId];
-    let clause = 'WHERE tracking_id = ?';
-    if (userId) { clause += ' AND user_id = ?'; params.push(userId); }
+    let clause = 'WHERE v.tracking_id = ?';
+    if (userId) { clause += ' AND v.user_id = ?'; params.push(userId); }
 
     const rows = await query(
-      `SELECT * FROM verification_results ${clause} LIMIT 1`, params
+      `SELECT v.*,
+              p.status          AS review_status,
+              p.application_ref AS application_ref,
+              p.reviewed_by     AS reviewed_by,
+              p.reviewed_at     AS reviewed_at,
+              p.review_reason   AS review_reason,
+              ${FINAL_DECISION_SQL} AS final_decision
+       FROM verification_results v
+       ${REVIEW_JOIN_SQL}
+       ${clause} LIMIT 1`, params
     );
     if (!rows.length) return null;
 
@@ -255,34 +297,38 @@ export const databaseService = {
   // Dashboard aggregates
   // =======================================================================
   async getStats(userId = null) {
-    const clause = userId ? 'WHERE user_id = ?' : '';
+    const clause = userId ? 'WHERE v.user_id = ?' : '';
     const params = userId ? [userId] : [];
 
+    // Counted on the final outcome, not the engine's first verdict.
     const [totals] = await query(
       `SELECT
-         COUNT(*)                                          AS total,
-         SUM(decision = 'ACCEPT')                          AS accepted,
-         SUM(decision = 'REVIEW')                          AS review,
-         SUM(decision = 'REJECT')                          AS rejected,
-         COALESCE(AVG(similarity_score), 0)                AS avgSimilarity,
-         COALESCE(AVG(verification_probability), 0)        AS avgProbability
-       FROM verification_results ${clause}`,
+         COUNT(*)                                     AS total,
+         SUM(${FINAL_DECISION_SQL} = 'ACCEPT')        AS accepted,
+         SUM(${FINAL_DECISION_SQL} = 'REVIEW')        AS review,
+         SUM(${FINAL_DECISION_SQL} = 'REJECT')        AS rejected,
+         SUM(p.status IN ('ACCEPTED','APPROVED','REJECTED')) AS decidedByOfficer,
+         COALESCE(AVG(v.similarity_score), 0)         AS avgSimilarity,
+         COALESCE(AVG(v.verification_probability), 0) AS avgProbability
+       FROM verification_results v ${REVIEW_JOIN_SQL} ${clause}`,
       params
     );
 
     const trend = await query(
-      `SELECT DATE(created_at) AS day, COUNT(*) AS count
-       FROM verification_results
-       ${clause ? `${clause} AND` : 'WHERE'} created_at >= DATE_SUB(CURDATE(), INTERVAL 6 DAY)
-       GROUP BY DATE(created_at) ORDER BY day ASC`,
+      `SELECT DATE(v.created_at) AS day, COUNT(*) AS count
+       FROM verification_results v
+       ${clause ? `${clause} AND` : 'WHERE'} v.created_at >= DATE_SUB(CURDATE(), INTERVAL 6 DAY)
+       GROUP BY DATE(v.created_at) ORDER BY day ASC`,
       params
     );
 
     const recent = await query(
-      `SELECT tracking_id, submitted_title, decision, similarity_score,
-              verification_probability, created_at
-       FROM verification_results ${clause}
-       ORDER BY created_at DESC, id DESC LIMIT 6`,
+      `SELECT v.tracking_id, v.submitted_title, v.decision, v.similarity_score,
+              v.verification_probability, v.created_at,
+              p.status AS review_status, p.reviewed_by, p.review_reason,
+              ${FINAL_DECISION_SQL} AS final_decision
+       FROM verification_results v ${REVIEW_JOIN_SQL} ${clause}
+       ORDER BY v.created_at DESC, v.id DESC LIMIT 6`,
       params
     );
 
@@ -291,13 +337,19 @@ export const databaseService = {
       accepted: Number(totals.accepted || 0),
       review: Number(totals.review || 0),
       rejected: Number(totals.rejected || 0),
+      decidedByOfficer: Number(totals.decidedByOfficer || 0),
       avgSimilarity: Number(totals.avgSimilarity || 0),
       avgProbability: Number(totals.avgProbability || 0),
-      trend: trend.map((t) => ({ day: t.day, count: Number(t.count) })),
+      trend: trend.map((t2) => ({ day: t2.day, count: Number(t2.count) })),
       recent: recent.map((r) => ({
         trackingId: r.tracking_id,
         title: r.submitted_title,
-        decision: r.decision,
+        decision: r.final_decision,
+        aiDecision: r.decision,
+        reviewStatus: r.review_status,
+        reviewedBy: r.reviewed_by,
+        reviewReason: r.review_reason,
+        decidedByOfficer: ['ACCEPTED', 'APPROVED', 'REJECTED'].includes(r.review_status),
         similarityScore: Number(r.similarity_score),
         verificationProbability: Number(r.verification_probability),
         createdAt: r.created_at
@@ -315,22 +367,30 @@ export const databaseService = {
   },
 
   // =======================================================================
-  // Pending applications (requirement 5.b)
   // =======================================================================
+  // Pending applications & Admin Review  (requirement 5.b)
   // =======================================================================
-  // Pending applications & Admin Review
-  // =======================================================================
+  /**
+   * Put an application into the queue.
+   *
+   * `status` matters:
+   *   MANUAL_REVIEW - the AI landed in the 65-85% band and an officer must
+   *                   accept or reject it. This is what fills the admin queue.
+   *   PENDING       - the AI accepted it and the applicant asked to stake a
+   *                   claim on the title.
+   */
   async createPendingApplication({ applicationRef, userId, verificationId,
                                    title, normalizedTitle, language,
-                                   periodicity, publisher, state }) {
+                                   periodicity, publisher, state,
+                                   status = 'PENDING' }) {
     await query(
       `INSERT INTO pending_applications
          (application_ref, user_id, verification_id, title, normalized_title,
           language, periodicity, publisher, publication_state, status)
-       VALUES (?,?,?,?,?,?,?,?,?, 'PENDING')`,
+       VALUES (?,?,?,?,?,?,?,?,?,?)`,
       [applicationRef, userId || null, verificationId || null, title,
        normalizedTitle, language || null, periodicity || null,
-       publisher || null, state || null]
+       publisher || null, state || null, status]
     );
     return applicationRef;
   },
@@ -388,6 +448,7 @@ export const databaseService = {
          p.reviewed_by              AS reviewedBy,
          p.reviewed_at              AS reviewedAt,
          p.rejection_reason         AS rejectionReason,
+         p.review_reason            AS reviewReason,
          p.submitted_at             AS submittedAt,
          p.decided_at               AS decidedAt,
          u.username                 AS submittedByName,
@@ -440,6 +501,7 @@ export const databaseService = {
          p.reviewed_by              AS reviewedBy,
          p.reviewed_at              AS reviewedAt,
          p.rejection_reason         AS rejectionReason,
+         p.review_reason            AS reviewReason,
          p.submitted_at             AS submittedAt,
          p.decided_at               AS decidedAt,
          u.username                 AS submittedByName,
@@ -508,7 +570,11 @@ export const databaseService = {
     };
   },
 
-  async updatePendingStatus(applicationRef, status, { reviewedBy = null, rejectionReason = null } = {}) {
+  async updatePendingStatus(applicationRef, status,
+                            { reviewedBy = null, rejectionReason = null,
+                              reason = null } = {}) {
+    // One written justification, recorded whichever way the officer decides.
+    const decisionReason = reason || rejectionReason || null;
     // Normalise status
     let dbStatus = status;
     if (status === 'ACCEPT') dbStatus = 'ACCEPTED';
@@ -521,14 +587,17 @@ export const databaseService = {
          status = ?,
          reviewed_by = COALESCE(?, reviewed_by),
          reviewed_at = NOW(),
-         rejection_reason = ?,
+         review_reason = ?,
+         rejection_reason = CASE WHEN ? = 'REJECTED' THEN ? ELSE rejection_reason END,
          decided_at = CASE WHEN ? IN ('APPROVED','ACCEPTED','REJECTED','WITHDRAWN')
                            THEN NOW() ELSE decided_at END
        WHERE application_ref = ?`,
-      [dbStatus, reviewedBy, rejectionReason || null, dbStatus, applicationRef]
+      [dbStatus, reviewedBy, decisionReason, dbStatus, decisionReason,
+       dbStatus, applicationRef]
     );
 
-    return { applicationRef, status: dbStatus, reviewedBy, rejectionReason };
+    return { applicationRef, status: dbStatus, reviewedBy,
+             reason: decisionReason, rejectionReason: decisionReason };
   },
 
   async getAdminStats() {
@@ -536,24 +605,26 @@ export const databaseService = {
       const [pendingRow] = await query(
         "SELECT COUNT(*) AS count FROM pending_applications WHERE status IN ('PENDING','UNDER_REVIEW','MANUAL_REVIEW')"
       );
+      // "Today" means today. These are labelled as daily figures in the UI,
+      // so counting all time would be a lie on the dashboard.
       const [acceptedRow] = await query(
-        "SELECT COUNT(*) AS count FROM pending_applications WHERE status IN ('ACCEPTED','APPROVED')"
+        "SELECT COUNT(*) AS count FROM pending_applications "
+        + "WHERE status IN ('ACCEPTED','APPROVED') AND DATE(decided_at) = CURDATE()"
       );
       const [rejectedRow] = await query(
-        "SELECT COUNT(*) AS count FROM pending_applications WHERE status = 'REJECTED'"
+        "SELECT COUNT(*) AS count FROM pending_applications "
+        + "WHERE status = 'REJECTED' AND DATE(decided_at) = CURDATE()"
       );
       const [totalRow] = await query(
         "SELECT COUNT(*) AS count FROM verification_results"
-      );
-      const [appTotalRow] = await query(
-        "SELECT COUNT(*) AS count FROM pending_applications"
       );
 
       return {
         pendingReviews: Number(pendingRow?.count || 0),
         acceptedToday: Number(acceptedRow?.count || 0),
         rejectedToday: Number(rejectedRow?.count || 0),
-        totalRequests: Math.max(Number(totalRow?.count || 0), Number(appTotalRow?.count || 0), 1)
+        // No Math.max floor - an empty system honestly reports zero.
+        totalRequests: Number(totalRow?.count || 0)
       };
     } catch (err) {
       console.error('[databaseService] getAdminStats error:', err);
@@ -591,7 +662,17 @@ function mapVerificationRow(row) {
     language: row.language,
     publicationType: row.publication_type,
     publisher: row.publisher,
-    decision: row.decision,
+    // `decision` is the final outcome the UI should render; `aiDecision`
+    // preserves what the engine originally said.
+    decision: row.final_decision || row.decision,
+    aiDecision: row.decision,
+    reviewStatus: row.review_status || null,
+    applicationRef: row.application_ref || null,
+    reviewedBy: row.reviewed_by || null,
+    reviewedAt: row.reviewed_at || null,
+    reviewReason: row.review_reason || null,
+    decidedByOfficer: ['ACCEPTED', 'APPROVED', 'REJECTED']
+      .includes(row.review_status),
     similarityScore: Number(row.similarity_score),
     verificationProbability: Number(row.verification_probability),
     confidence: row.confidence,

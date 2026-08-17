@@ -82,9 +82,23 @@ export const titleController = {
       console.error('[titles] could not persist verification:', err.message);
     }
 
-    // Requirement 5.b - a title that has been applied for blocks later
-    // look-alike submissions, so it joins the live corpus straight away.
-    if (trackApplication && result.decision !== 'REJECT') {
+    // ---------------------------------------------------------------------
+    // Queue routing.
+    //
+    // REVIEW  - the combined similarity landed in the 65-85% band, so the
+    //           system will not decide on its own. The application goes into
+    //           the admin queue as MANUAL_REVIEW automatically; the applicant
+    //           does not get to opt out of that. This is what populates the
+    //           Admin Review Queue with real work.
+    // ACCEPT  - queued only if the applicant asked to stake a claim on the
+    //           title (requirement 5.b).
+    // REJECT  - never queued; there is nothing for an officer to decide.
+    // ---------------------------------------------------------------------
+    let queueStatus = null;
+    if (result.decision === 'REVIEW') queueStatus = 'MANUAL_REVIEW';
+    else if (result.decision === 'ACCEPT' && trackApplication) queueStatus = 'PENDING';
+
+    if (queueStatus) {
       applicationRef = makeApplicationRef();
       try {
         await databaseService.createPendingApplication({
@@ -93,8 +107,11 @@ export const titleController = {
           verificationId,
           title: result.title,
           normalizedTitle: result.normalizedTitle,
-          language, periodicity, publisher, state
+          language, periodicity, publisher, state,
+          status: queueStatus
         });
+        // A queued title - whether awaiting review or already claimed -
+        // must block later look-alike submissions immediately.
         await aiService.registerPending({
           title: result.title,
           applicationRef,
@@ -106,6 +123,7 @@ export const titleController = {
       } catch (err) {
         console.error('[titles] could not queue the application:', err.message);
         applicationRef = null;
+        queueStatus = null;
       }
     }
 
@@ -114,6 +132,8 @@ export const titleController = {
       trackingId,
       persisted,
       applicationRef,
+      queueStatus,
+      awaitingReview: queueStatus === 'MANUAL_REVIEW',
       result
     });
   },

@@ -119,11 +119,21 @@ export const historyController = {
       });
     }
 
-    const rejectionReason = req.body?.rejectionReason ? String(req.body.rejectionReason).trim() : null;
-    if ((status === 'REJECT' || status === 'REJECTED') && !rejectionReason) {
+    // A written justification is mandatory for BOTH outcomes. An approval
+    // with no stated ground is exactly as unaccountable as a rejection with
+    // none - the whole point of manual review is that a human explains why.
+    const raw = req.body?.reason ?? req.body?.rejectionReason;
+    const reason = raw ? String(raw).trim() : null;
+    const isDecision = ['ACCEPT', 'ACCEPTED', 'APPROVED', 'REJECT', 'REJECTED']
+      .includes(status);
+
+    if (isDecision && (!reason || reason.length < 10)) {
       return res.status(400).json({
         success: false,
-        message: 'Rejection reason is mandatory when rejecting a publication title.'
+        message:
+          'A written reason of at least 10 characters is required to '
+          + `${status.startsWith('REJ') ? 'reject' : 'accept'} a title held for `
+          + 'manual review. It is recorded in the audit trail against your name.'
       });
     }
 
@@ -133,7 +143,7 @@ export const historyController = {
       const result = await databaseService.updatePendingStatus(
         req.params.applicationRef,
         status,
-        { reviewedBy, rejectionReason }
+        { reviewedBy, reason }
       );
 
       // Approving, accepting or withdrawing changes what later applicants are checked

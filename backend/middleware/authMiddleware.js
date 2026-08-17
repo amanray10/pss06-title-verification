@@ -71,6 +71,36 @@ export async function authenticateToken(req, res, next) {
   }
 }
 
+/** Roles allowed to accept or reject a title held in manual review. */
+export const REVIEW_ROLES = ['administrator', 'admin', 'verification officer', 'officer'];
+
+export function isReviewer(user) {
+  const role = String(user?.role || '').toLowerCase();
+  return REVIEW_ROLES.some((r) => role.includes(r));
+}
+
+/**
+ * Hard gate for the admin review queue.
+ *
+ * Hiding the nav item in the sidebar is cosmetic - anyone can still call the
+ * API with curl. The decision endpoint is the one that actually changes a
+ * title's fate, so the role check has to live here on the server.
+ */
+export async function requireAdmin(req, res, next) {
+  return authenticateToken(req, res, () => {
+    if (!isReviewer(req.user)) {
+      return res.status(403).json({
+        success: false,
+        message:
+          `Your account has the role "${req.user?.role || 'unknown'}", which `
+          + 'does not carry PRGI review authority. Only an Administrator or '
+          + 'Verification Officer can decide a title held for manual review.'
+      });
+    }
+    return next();
+  });
+}
+
 /**
  * Soft gate - attaches req.user when a valid token is present but never
  * blocks. Used on /verify so the checker can be demonstrated without a login

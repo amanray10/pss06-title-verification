@@ -316,6 +316,14 @@ export const Dashboard = ({ user, onNavigate, onLogout, onVerified }) => {
                           <span className={`gov-status-badge ${meta.cls}`}>
                             <meta.Icon size={12} strokeWidth={2.5} /> {meta.label}
                           </span>
+                          {/* Make it explicit when an officer overruled or
+                              confirmed the engine, rather than silently
+                              showing the AI's original verdict. */}
+                          {row.decidedByOfficer && (
+                            <div className="gov-decided-note">
+                              by {row.reviewedBy || 'officer'} after review
+                            </div>
+                          )}
                         </td>
                         <td className="gov-td-date">
                           {new Date(row.createdAt).toLocaleDateString('en-IN', {

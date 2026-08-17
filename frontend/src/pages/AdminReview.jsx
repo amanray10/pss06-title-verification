@@ -50,45 +50,15 @@ const fmtDateTime = (v) =>
     hour: '2-digit', minute: '2-digit'
   }) : '-';
 
-const MOCK_REVIEW_DATA = {
-  'APP-2026-DNI01': {
-    applicationRef: 'APP-2026-DNI01',
-    title: 'Daily News India',
-    submittedByName: 'Rahul Sharma',
-    submittedByOrg: 'Sharma Media Group',
-    submittedByEmail: 'rahul.sharma@presscorp.in',
-    language: 'English',
-    publicationType: 'Newspaper',
-    periodicity: 'Daily',
-    publicationState: 'Delhi',
-    submittedAt: '2026-08-16T14:30:00Z',
-    similarityScore: 87,
-    verificationProbability: 89.5,
-    status: 'PENDING',
-    aiDecision: 'REVIEW',
-    aiExplanation: 'The proposed title has a high semantic similarity with existing registered publication titles.',
-    findings: [
-      { ruleId: 'R07', ruleName: 'DISALLOWED_AFFIX', severity: 'MAJOR', message: 'Generic geographic affix "India" appended to registered title "Daily News".' },
-      { ruleId: 'R13', ruleName: 'MODERATE_SIMILARITY', severity: 'MAJOR', message: 'Similarity score 87.0% exceeds review threshold.' }
-    ],
-    checksPassed: ['R01: Exact duplicate checked', 'R02: Prohibited words checked', 'R04: Character formatting validated'],
-    similarTitles: [
-      { rank: 1, title: 'Daily News', similarity: 87, metadata: { publisher: 'ABC Publications', registrationNumber: 'DEL/2018/14298', state: 'Delhi' }, scores: { semantic: 0.89, reranker: 0.91 } },
-      { rank: 2, title: 'Daily News India Today', similarity: 81, metadata: { publisher: 'XYZ Media', registrationNumber: 'MAH/2020/22901', state: 'Maharashtra' }, scores: { semantic: 0.83, reranker: 0.81 } },
-      { rank: 3, title: 'India Daily News', similarity: 76, metadata: { publisher: 'DEF Publications', registrationNumber: 'UP/2019/33104', state: 'Uttar Pradesh' }, scores: { semantic: 0.79, reranker: 0.75 } },
-      { rank: 4, title: 'The Daily News', similarity: 72, metadata: { publisher: 'National Publications', registrationNumber: 'WB/2017/09871', state: 'West Bengal' }, scores: { semantic: 0.74, reranker: 0.71 } },
-      { rank: 5, title: 'Daily India', similarity: 68, metadata: { publisher: 'India Media Group', registrationNumber: 'TN/2021/44912', state: 'Tamil Nadu' }, scores: { semantic: 0.69, reranker: 0.67 } }
-    ]
-  }
-};
-
 export const AdminReview = ({ applicationRef, user, onNavigate, onLogout }) => {
   const [application, setApplication] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
   // Decision Modal State
-  const [activeModal, setActiveModal] = useState(null); // 'ACCEPT' | 'MANUAL_REVIEW' | 'REJECT' | null
+  // The admin IS the manual reviewer, so there is no third destination to
+  // send a title to. Two outcomes only, each needing a written reason.
+  const [activeModal, setActiveModal] = useState(null); // 'ACCEPT' | 'REJECT' | null
   const [rejectionReason, setRejectionReason] = useState('');
   const [reasonError, setReasonError] = useState('');
   const [submittingDecision, setSubmittingDecision] = useState(false);
@@ -99,28 +69,25 @@ export const AdminReview = ({ applicationRef, user, onNavigate, onLogout }) => {
     setLoading(true);
     setError('');
 
-    const targetRef = applicationRef || 'APP-2026-DNI01';
+    if (!applicationRef) {
+      setError('No application reference supplied. Open a title from the review queue.');
+      setLoading(false);
+      return () => { alive = false; };
+    }
 
-    api.adminPendingDetail(targetRef)
+    api.adminPendingDetail(applicationRef)
       .then((data) => {
         if (!alive) return;
         if (data?.application) {
           setApplication(data.application);
-        } else if (MOCK_REVIEW_DATA[targetRef] || MOCK_REVIEW_DATA['APP-2026-DNI01']) {
-          setApplication(MOCK_REVIEW_DATA[targetRef] || MOCK_REVIEW_DATA['APP-2026-DNI01']);
         } else {
-          setError('Unable to load application details.');
+          setError(`No application found with reference ${applicationRef}.`);
         }
       })
       .catch((err) => {
         if (!alive) return;
         console.error('[AdminReview] load error:', err);
-        const fallback = MOCK_REVIEW_DATA[targetRef] || MOCK_REVIEW_DATA['APP-2026-DNI01'];
-        if (fallback) {
-          setApplication(fallback);
-        } else {
-          setError(err.message || 'Unable to load application details.');
-        }
+        setError(err.message || 'Unable to load application details.');
       })
       .finally(() => {
         if (alive) setLoading(false);
@@ -143,12 +110,16 @@ export const AdminReview = ({ applicationRef, user, onNavigate, onLogout }) => {
   };
 
   const handleConfirmDecision = async () => {
-    if (activeModal === 'REJECT') {
-      const trimmed = rejectionReason.trim();
-      if (!trimmed) {
-        setReasonError('Please enter a rejection reason before confirming.');
-        return;
-      }
+    // Both remaining outcomes are final decisions, so a written reason is
+    // always required - the server rejects the request without one anyway.
+    const trimmed = rejectionReason.trim();
+    if (trimmed.length < 10) {
+      setReasonError(
+        activeModal === 'REJECT'
+          ? 'State why this title is being rejected (at least 10 characters).'
+          : 'State the grounds for accepting this title (at least 10 characters).'
+      );
+      return;
     }
 
     setSubmittingDecision(true);
@@ -156,14 +127,12 @@ export const AdminReview = ({ applicationRef, user, onNavigate, onLogout }) => {
 
     try {
       const res = await api.adminUpdateDecision(applicationRef, {
-        status: activeModal === 'ACCEPT' ? 'ACCEPTED' : activeModal === 'MANUAL_REVIEW' ? 'MANUAL_REVIEW' : 'REJECTED',
-        rejectionReason: activeModal === 'REJECT' ? rejectionReason.trim() : null
+        status: activeModal === 'ACCEPT' ? 'ACCEPTED' : 'REJECTED',
+        reason: trimmed
       });
 
       const message = activeModal === 'ACCEPT'
         ? 'Title accepted successfully.'
-        : activeModal === 'MANUAL_REVIEW'
-          ? 'Title sent for manual review.'
           : 'Title rejected successfully.';
 
       setToastMessage({ type: 'success', text: message });
@@ -314,9 +283,10 @@ export const AdminReview = ({ applicationRef, user, onNavigate, onLogout }) => {
               <p style={{ fontSize: '0.82rem', color: application.status === 'REJECTED' ? '#b91c1c' : '#047857', marginTop: 2 }}>
                 Reviewed by <strong>{application.reviewedBy}</strong> on {fmtDateTime(application.reviewedAt || application.decidedAt)}.
               </p>
-              {application.rejectionReason && (
+              {(application.reviewReason || application.rejectionReason) && (
                 <div style={{ marginTop: 8, padding: '8px 12px', backgroundColor: 'rgba(255,255,255,0.7)', borderRadius: 6, fontSize: '0.82rem', color: '#7f1d1d' }}>
-                  <strong>Rejection Reason:</strong> {application.rejectionReason}
+                  <strong>Officer's reason:</strong>{' '}
+                  {application.reviewReason || application.rejectionReason}
                 </div>
               )}
             </div>
@@ -803,30 +773,7 @@ export const AdminReview = ({ applicationRef, user, onNavigate, onLogout }) => {
               <span>✓ ACCEPT TITLE</span>
             </button>
 
-            {/* Button 2: Send for Manual Review */}
-            <button
-              className="btn btn-warning"
-              style={{
-                backgroundColor: '#d97706',
-                color: '#ffffff',
-                border: 'none',
-                padding: '14px 28px',
-                borderRadius: 12,
-                fontSize: '0.95rem',
-                fontWeight: 800,
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 8,
-                boxShadow: '0 4px 14px rgba(217, 119, 6, 0.35)',
-                cursor: 'pointer'
-              }}
-              onClick={() => handleOpenModal('MANUAL_REVIEW')}
-            >
-              <AlertTriangle size={18} strokeWidth={2.5} />
-              <span>⚠ SEND FOR MANUAL REVIEW</span>
-            </button>
-
-            {/* Button 3: Reject Title */}
+            {/* Button 2: Reject Title */}
             <button
               className="btn btn-danger"
               style={{
@@ -880,21 +827,19 @@ export const AdminReview = ({ applicationRef, user, onNavigate, onLogout }) => {
                   width: 44,
                   height: 44,
                   borderRadius: 12,
-                  backgroundColor: activeModal === 'ACCEPT' ? '#e6f9f0' : activeModal === 'MANUAL_REVIEW' ? '#fef3c7' : '#fee2e2',
+                  backgroundColor: activeModal === 'ACCEPT' ? '#e6f9f0' : '#fee2e2',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  color: activeModal === 'ACCEPT' ? '#059669' : activeModal === 'MANUAL_REVIEW' ? '#d97706' : '#dc2626'
+                  color: activeModal === 'ACCEPT' ? '#059669' : '#dc2626'
                 }}>
                   {activeModal === 'ACCEPT' && <CheckCircle2 size={24} />}
-                  {activeModal === 'MANUAL_REVIEW' && <AlertTriangle size={24} />}
                   {activeModal === 'REJECT' && <XCircle size={24} />}
                 </div>
 
                 <div>
                   <h3 style={{ fontSize: '1.25rem', fontWeight: 800, color: '#0c1e3d', margin: 0 }}>
                     {activeModal === 'ACCEPT' && 'Accept this publication title?'}
-                    {activeModal === 'MANUAL_REVIEW' && 'Send this title for manual review?'}
                     {activeModal === 'REJECT' && 'Reject this publication title?'}
                   </h3>
                   <span style={{ fontSize: '0.8rem', color: '#64748b' }}>
@@ -911,23 +856,24 @@ export const AdminReview = ({ applicationRef, user, onNavigate, onLogout }) => {
                   </p>
                 )}
 
-                {activeModal === 'MANUAL_REVIEW' && (
-                  <p style={{ fontSize: '0.88rem', color: '#475569', lineHeight: 1.5, margin: 0 }}>
-                    Confirm referring this application for detailed manual inspection. The title will be queued under <strong>MANUAL REVIEW</strong> for verification officer appraisal.
-                  </p>
-                )}
-
-                {activeModal === 'REJECT' && (
-                  <div>
+                <div>
                     <p style={{ fontSize: '0.88rem', color: '#475569', lineHeight: 1.5, marginBottom: 12 }}>
-                      Please provide a formal statutory justification for rejecting this publication title. This reason will be recorded in the official audit trail.
+                      {activeModal === 'REJECT'
+                        ? 'Please provide a formal statutory justification for rejecting this publication title.'
+                        : 'Please state the grounds on which you are overriding the moderate-similarity recommendation and accepting this title.'}
+                      {' '}This reason is recorded in the official audit trail against your name.
                     </p>
 
                     <label style={{ fontSize: '0.82rem', fontWeight: 700, color: '#334155', display: 'block', marginBottom: 6 }}>
-                      Reason for rejection <span style={{ color: '#dc2626' }}>*</span>
+                      {activeModal === 'REJECT'
+                        ? 'Reason for rejection'
+                        : 'Grounds for acceptance'}{' '}
+                      <span style={{ color: '#dc2626' }}>*</span>
                     </label>
                     <textarea
-                      placeholder="Enter rejection reason (e.g. High similarity with registered title 'Daily News' under Section 2.a)..."
+                      placeholder={activeModal === 'REJECT'
+                        ? "e.g. Differs from the registered title 'Agra Bharat' only by the generic suffix Patrika; not sufficiently distinctive under Section 2.a."
+                        : "e.g. The shared words are generic registry terms; the distinctive element and the district of publication are different."}
                       value={rejectionReason}
                       onChange={(e) => {
                         setRejectionReason(e.target.value);
@@ -946,8 +892,7 @@ export const AdminReview = ({ applicationRef, user, onNavigate, onLogout }) => {
                       }}
                       required
                     />
-                  </div>
-                )}
+                </div>
 
                 {/* Error Banner */}
                 {reasonError && (
@@ -973,7 +918,7 @@ export const AdminReview = ({ applicationRef, user, onNavigate, onLogout }) => {
                 <button
                   type="button"
                   style={{
-                    backgroundColor: activeModal === 'ACCEPT' ? '#059669' : activeModal === 'MANUAL_REVIEW' ? '#d97706' : '#dc2626',
+                    backgroundColor: activeModal === 'ACCEPT' ? '#059669' : '#dc2626',
                     color: '#ffffff',
                     border: 'none',
                     padding: '8px 20px',
@@ -996,7 +941,6 @@ export const AdminReview = ({ applicationRef, user, onNavigate, onLogout }) => {
                   ) : (
                     <>
                       {activeModal === 'ACCEPT' && 'Confirm Accept'}
-                      {activeModal === 'MANUAL_REVIEW' && 'Confirm'}
                       {activeModal === 'REJECT' && 'Confirm Rejection'}
                     </>
                   )}

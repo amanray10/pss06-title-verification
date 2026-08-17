@@ -139,6 +139,9 @@ CREATE TABLE IF NOT EXISTS pending_applications (
     reviewed_by       VARCHAR(64)          DEFAULT NULL,
     reviewed_at       DATETIME             DEFAULT NULL,
     rejection_reason  TEXT                 DEFAULT NULL,
+    -- The officer's written justification, recorded for BOTH accept and
+    -- reject. rejection_reason is kept for backward compatibility.
+    review_reason     TEXT                 DEFAULT NULL,
     submitted_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     decided_at        DATETIME             DEFAULT NULL,
     PRIMARY KEY (id),
